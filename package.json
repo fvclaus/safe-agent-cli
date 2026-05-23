@@ -1,0 +1,30 @@
+{
+  "name": "claude-gcp",
+  "version": "1.0.0",
+  "description": "Launch Claude Code with GCP service account impersonation",
+  "type": "module",
+  "bin": {
+    "claude-gcp": "./src/index.tsx"
+  },
+  "scripts": {
+    "start": "node --transform-types src/index.tsx",
+    "typecheck": "tsc --noEmit"
+  },
+  "packageManager": "pnpm@11.2.2",
+  "engines": {
+    "node": ">=24"
+  },
+  "dependencies": {
+    "@inkjs/ui": "^2.0.0",
+    "@optique/core": "^1.0.2",
+    "@optique/run": "^1.0.2",
+    "ink": "^7.0.3",
+    "react": "^19.2.6",
+    "zx": "^8.8.5"
+  },
+  "devDependencies": {
+    "@types/node": "^25.9.1",
+    "@types/react": "^19.2.15",
+    "typescript": "^6.0.3"
+  }
+}
