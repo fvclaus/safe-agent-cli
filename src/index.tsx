@@ -1,4 +1,4 @@
-#!/usr/bin/env -S node --transform-types
+#!/usr/bin/env bun
 import React, { useState } from 'react';
 import { render, Box, Text, useApp, useInput } from 'ink';
 import { TextInput } from '@inkjs/ui';
@@ -17,7 +17,6 @@ import {
 } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { spawn } from 'node:child_process';
 
 $.verbose = false;
 
@@ -297,23 +296,16 @@ async function main(): Promise<void> {
   // ── Launch Claude Code ─────────────────────────────────────────────────────
   log(`Launching Claude Code for project ${projectId}…\n`);
 
-  await new Promise<void>((resolve, reject) => {
-    const child = spawn('claude', [], {
-      stdio: 'inherit',
-      env: {
-        ...process.env,
-        CLOUDSDK_CONFIG: configDir,
-        GOOGLE_OAUTH_ACCESS_TOKEN: token,
-        FIREBASE_TOKEN: token,
-        GOOGLE_APPLICATION_CREDENTIALS: adcFile,
-      },
-    });
-    child.on('close', (code: number | null) => {
-      if (code === 0 || code === null) resolve();
-      else reject(new Error(`claude exited with code ${code}`));
-    });
-    child.on('error', reject);
-  });
+  await $({
+    stdio: 'inherit',
+    env: {
+      ...process.env,
+      CLOUDSDK_CONFIG: configDir,
+      GOOGLE_OAUTH_ACCESS_TOKEN: token,
+      FIREBASE_TOKEN: token,
+      GOOGLE_APPLICATION_CREDENTIALS: adcFile,
+    },
+  })`claude`;
 }
 
 main().catch((e: unknown) => {
