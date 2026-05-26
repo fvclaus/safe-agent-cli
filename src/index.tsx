@@ -128,12 +128,35 @@ async function inkPrompt<T>(element: React.ReactElement, resolve: () => T): Prom
 }
 
 // ─── Fetch GCP project IDs ────────────────────────────────────────────────────
-async function listProjects(): Promise<string[]> {
+interface ProjectListResult {
+  projects: string[];
+  error?: string;
+}
+
+async function listProjects(): Promise<ProjectListResult> {
+  const which = spawnSync('which', ['gcloud'], { encoding: 'utf8' });
+  if (which.status !== 0) {
+    return {
+      projects: [],
+      error: 'gcloud CLI not found. Install the Google Cloud SDK:\n  https://cloud.google.com/sdk/docs/install',
+    };
+  }
+
+  // Check there is an active authenticated account
+  const authList = spawnSync('gcloud', ['auth', 'list', '--filter=status:ACTIVE', '--format=value(account)'], { encoding: 'utf8' });
+  const activeAccount = authList.stdout.trim();
+  if (!activeAccount) {
+    return {
+      projects: [],
+      error: 'No active gcloud account found. Authenticate first:\n  gcloud auth login',
+    };
+  }
+
   try {
     const out = await $`gcloud projects list --format=${'value(projectId)'}`;
-    return out.stdout.trim().split('\n').filter(Boolean);
+    return { projects: out.stdout.trim().split('\n').filter(Boolean) };
   } catch {
-    return [];
+    return { projects: [], error: 'Could not list projects. Run manually to see the error:\n  gcloud projects list' };
   }
 }
 
@@ -158,6 +181,14 @@ async function main(): Promise<void> {
   // ── Resolve GitHub PAT ─────────────────────────────────────────────────────
   let githubToken: string | undefined;
   if (args.gh || args.github) {
+    const secretToolAvailable = spawnSync('which', ['secret-tool'], { encoding: 'utf8' }).status === 0;
+    if (!secretToolAvailable) {
+      log(c.red('ERROR:') + ' secret-tool is not installed.');
+      log('Install it with:');
+      log('  sudo apt install libsecret-tools');
+      process.exit(1);
+    }
+
     const folderName = basename(process.cwd());
     log(`\nLooking up GitHub PAT for ${c.bold(folderName)}…`);
     try {
@@ -179,15 +210,28 @@ async function main(): Promise<void> {
   let gcpToken: string | undefined;
 
   if (args.gcp || args.googleCloud) {
+    const gcloudPath = spawnSync('which', ['gcloud'], { encoding: 'utf8' }).stdout.trim();
+    const realpath = spawnSync('realpath', [gcloudPath], { encoding: 'utf8' });
+    if (realpath.status === 0 && realpath.stdout.trim() === '/usr/bin/snap') {
+      log(c.red('ERROR:') + ' gcloud is installed via snap, which is not supported.');
+      log('Snap launchers require a systemd user session to set up confinement.');
+      log('When gcloud is spawned as a subprocess it cannot create the required');
+      log('transient scope, causing all gcloud commands to fail silently.');
+      log('Install the Google Cloud SDK directly instead:');
+      log('  https://cloud.google.com/sdk/docs/install');
+      process.exit(1);
+    }
+
     // Resolve project ID
     let projectId: string;
     if (args.project !== undefined) {
       projectId = args.project;
     } else {
       log('Fetching GCP project list…');
-      const projects = await listProjects();
-      if (projects.length === 0) {
+      const { projects, error: listError } = await listProjects();
+      if (listError) {
         log(c.yellow('WARNING:') + ' Could not list projects — enter project ID manually.');
+        log(c.yellow('REASON:') + ' ' + listError);
       }
       const folderName = basename(process.cwd()).toLowerCase();
       const initialValue = projects.find(p => p.toLowerCase().startsWith(folderName)) ?? '';
