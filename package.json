@@ -1,10 +1,10 @@
 {
-  "name": "claude-gcp",
+  "name": "safe-claude-code",
   "version": "1.0.0",
   "description": "Launch Claude Code with GCP service account impersonation",
   "type": "module",
   "bin": {
-    "claude-gcp": "./src/index.tsx"
+    "safe-claude-code": "./src/index.tsx"
   },
   "scripts": {
     "start": "bun src/index.tsx",

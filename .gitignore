@@ -1,1 +1,14 @@
 node_modules/
+dist/
+
+# Claude Code sandbox bind-mount stubs (created automatically on each launch)
+.bash_profile
+.bashrc
+.gitconfig
+.gitmodules
+.idea
+.mcp.json
+.profile
+.ripgreprc
+.zprofile
+.zshrc
