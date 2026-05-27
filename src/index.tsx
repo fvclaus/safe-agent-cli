@@ -127,6 +127,24 @@ async function inkPrompt<T>(element: React.ReactElement, resolve: () => T): Prom
   return resolve();
 }
 
+// ─── Snap detection ───────────────────────────────────────────────────────────
+function isSnap(binary: string): boolean {
+  const which = spawnSync('which', [binary], { encoding: 'utf8' });
+  if (which.status !== 0) return false;
+  const realpath = spawnSync('realpath', [which.stdout.trim()], { encoding: 'utf8' });
+  return realpath.status === 0 && realpath.stdout.trim() === '/usr/bin/snap';
+}
+
+function abortIfSnap(binary: string, installHint: string): void {
+  if (!isSnap(binary)) return;
+  log(c.red('ERROR:') + ` ${binary} is installed via snap, which is not supported.`);
+  log('Snap launchers require a systemd user session to set up confinement.');
+  log(`When ${binary} is spawned as a subprocess it cannot create the required`);
+  log('transient scope, causing all commands to fail silently.');
+  log(`Install ${binary} directly instead:  ${installHint}`);
+  process.exit(1);
+}
+
 // ─── Fetch GCP project IDs ────────────────────────────────────────────────────
 interface ProjectListResult {
   projects: string[];
@@ -181,6 +199,7 @@ async function main(): Promise<void> {
   // ── Resolve GitHub PAT ─────────────────────────────────────────────────────
   let githubToken: string | undefined;
   if (args.gh || args.github) {
+    abortIfSnap('gh', 'https://cli.github.com');
     const secretToolAvailable = spawnSync('which', ['secret-tool'], { encoding: 'utf8' }).status === 0;
     if (!secretToolAvailable) {
       log(c.red('ERROR:') + ' secret-tool is not installed.');
@@ -204,23 +223,23 @@ async function main(): Promise<void> {
     }
   }
 
+  // ── GitHub CLI state dir (redirect writes away from ~/.local/state/gh) ──────
+  let ghStateDir: string | undefined;
+
+  if (githubToken !== undefined) {
+    ghStateDir = mkdtempSync(join(tmpdir(), 'safe-claude-code-gh-'));
+    mkdirSync(join(ghStateDir, 'config'), { recursive: true });
+    mkdirSync(join(ghStateDir, 'state', 'gh'), { recursive: true });
+    log(c.green('OK:') + ` gh state dir: ${ghStateDir}`);
+  }
+
   // ── GCP setup ─────────────────────────────────────────────────────────────
   let configDir: string | undefined;
   let adcFile: string | undefined;
   let gcpToken: string | undefined;
 
   if (args.gcp || args.googleCloud) {
-    const gcloudPath = spawnSync('which', ['gcloud'], { encoding: 'utf8' }).stdout.trim();
-    const realpath = spawnSync('realpath', [gcloudPath], { encoding: 'utf8' });
-    if (realpath.status === 0 && realpath.stdout.trim() === '/usr/bin/snap') {
-      log(c.red('ERROR:') + ' gcloud is installed via snap, which is not supported.');
-      log('Snap launchers require a systemd user session to set up confinement.');
-      log('When gcloud is spawned as a subprocess it cannot create the required');
-      log('transient scope, causing all gcloud commands to fail silently.');
-      log('Install the Google Cloud SDK directly instead:');
-      log('  https://cloud.google.com/sdk/docs/install');
-      process.exit(1);
-    }
+    abortIfSnap('gcloud', 'https://cloud.google.com/sdk/docs/install');
 
     // Resolve project ID
     let projectId: string;
@@ -386,6 +405,9 @@ async function main(): Promise<void> {
     if (configDir) {
       try { rmSync(configDir, { recursive: true, force: true }); } catch { /* ignore */ }
     }
+    if (ghStateDir) {
+      try { rmSync(ghStateDir, { recursive: true, force: true }); } catch { /* ignore */ }
+    }
   };
   process.on('exit', cleanup);
   process.on('SIGINT',  () => { cleanup(); process.exit(130); });
@@ -407,6 +429,10 @@ async function main(): Promise<void> {
         GOOGLE_APPLICATION_CREDENTIALS: adcFile!,
       } : {}),
       ...(githubToken !== undefined ? { GITHUB_TOKEN: githubToken } : {}),
+      ...(ghStateDir !== undefined ? {
+        GH_CONFIG_DIR: join(ghStateDir, 'config'),
+        XDG_STATE_HOME: join(ghStateDir, 'state'),
+      } : {}),
     },
   });
   if (result.error) throw result.error;
