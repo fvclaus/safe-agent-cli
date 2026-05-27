@@ -1,13 +1,12 @@
 #!/bin/bash
-LOG=/tmp/bwrap-wrapper.log
-printf '[%s] called with: %s\n' "$(date -Iseconds)" "$*" >> "$LOG"
 args=()
 for a in "$@"; do
-  if [ "$a" = "--unshare-net" ]; then
-    printf '[%s] stripped: --unshare-net\n' "$(date -Iseconds)" >> "$LOG"
-  else
-    args+=("$a")
-  fi
+  [ "$a" != "--unshare-net" ] && args+=("$a")
 done
-printf '[%s] exec: %s %s\n' "$(date -Iseconds)" "$REAL_BWRAP" "${args[*]}" >> "$LOG"
+
+if [ -n "$BWRAP_WRAPPER_DEBUG" ]; then
+  LOG="${TMPDIR:-/tmp}/bwrap-wrapper.log"
+  printf '[%s] exec: %s %s\n' "$(date -Iseconds)" "$REAL_BWRAP" "${args[*]}" >> "$LOG"
+fi
+
 exec "$REAL_BWRAP" "${args[@]}"
