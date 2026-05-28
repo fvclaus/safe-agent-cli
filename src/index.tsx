@@ -8,6 +8,7 @@ import { string } from '@optique/core/valueparser';
 import { message } from '@optique/core/message';
 import { run } from '@optique/run';
 import { $ } from 'zx';
+import chalk from 'chalk';
 import {
   mkdtempSync,
   mkdirSync,
@@ -22,14 +23,6 @@ import { spawnSync } from 'node:child_process';
 
 $.verbose = false;
 
-// ─── ANSI helpers (stderr only — stdout stays clean for piping) ───────────────
-const c = {
-  red:    (s: string) => `\x1b[1;31m${s}\x1b[0m`,
-  green:  (s: string) => `\x1b[1;32m${s}\x1b[0m`,
-  yellow: (s: string) => `\x1b[1;33m${s}\x1b[0m`,
-  blue:   (s: string) => `\x1b[1;34m${s}\x1b[0m`,
-  bold:   (s: string) => `\x1b[1m${s}\x1b[0m`,
-};
 const log = (msg: string) => process.stderr.write(msg + '\n');
 
 // ─── Ink: autocomplete project selector ──────────────────────────────────────
@@ -137,7 +130,7 @@ function isSnap(binary: string): boolean {
 
 function abortIfSnap(binary: string, installHint: string): void {
   if (!isSnap(binary)) return;
-  log(c.red('ERROR:') + ` ${binary} is installed via snap, which is not supported.`);
+  log(chalk.bold.red('ERROR:') + ` ${binary} is installed via snap, which is not supported.`);
   log('Snap launchers require a systemd user session to set up confinement.');
   log(`When ${binary} is spawned as a subprocess it cannot create the required`);
   log('transient scope, causing all commands to fail silently.');
@@ -196,30 +189,60 @@ async function main(): Promise<void> {
     },
   );
 
+  // Accumulate dirs (--add-dir) and system-prompt snippets for Claude
+  const claudeDirs: string[]          = [];
+  const systemPromptParts: string[]   = [];
+
   // ── Resolve GitHub PAT ─────────────────────────────────────────────────────
   let githubToken: string | undefined;
   if (args.gh || args.github) {
     abortIfSnap('gh', 'https://cli.github.com');
     const secretToolAvailable = spawnSync('which', ['secret-tool'], { encoding: 'utf8' }).status === 0;
     if (!secretToolAvailable) {
-      log(c.red('ERROR:') + ' secret-tool is not installed.');
+      log(chalk.bold.red('ERROR:') + ' secret-tool is not installed.');
       log('Install it with:');
       log('  sudo apt install libsecret-tools');
       process.exit(1);
     }
 
     const folderName = basename(process.cwd());
-    log(`\nLooking up GitHub PAT for ${c.bold(folderName)}…`);
+    log(`\nLooking up GitHub PAT for ${chalk.bold(folderName)}…`);
     try {
       const out = await $`secret-tool lookup github.pat ${folderName}`;
       githubToken = out.stdout.trim();
       if (!githubToken) throw new Error('empty');
-      log(c.green('OK:') + ' GitHub PAT found.');
+      log(chalk.bold.green('OK:') + ' GitHub PAT found.');
     } catch {
-      log(c.red('ERROR:') + ` No GitHub PAT found for "${folderName}".`);
+      log(chalk.bold.red('ERROR:') + ` No GitHub PAT found for "${folderName}".`);
       log('To store one, run:');
       log(`  secret-tool store --label="Github PAT ${folderName}" github.pat ${folderName}`);
       process.exit(1);
+    }
+
+    // Query token info so Claude knows its GitHub permissions upfront.
+    // Classic PATs return x-oauth-scopes; fine-grained PATs return null for that
+    // header but include a github-authentication-token-expiration header instead.
+    log('Fetching GitHub token info…');
+    let ghPermissionInfo = '';
+    try {
+      const resp = await fetch('https://api.github.com/user', {
+        headers: { Authorization: `token ${githubToken}` },
+      });
+      const scopes = resp.headers.get('x-oauth-scopes');
+      const expiry = resp.headers.get('github-authentication-token-expiration');
+      if (scopes !== null) {
+        const scopeList = scopes.split(',').map(s => s.trim()).filter(Boolean);
+        ghPermissionInfo = `GitHub classic PAT scopes: ${scopeList.join(', ') || '(none)'}`;
+      } else {
+        ghPermissionInfo = `GitHub fine-grained PAT${expiry ? `, expires ${expiry}` : ''}`;
+      }
+    } catch { /* non-fatal */ }
+
+    if (ghPermissionInfo) {
+      log(chalk.bold.green('OK:') + ` ${ghPermissionInfo}`);
+      systemPromptParts.push(ghPermissionInfo);
+    } else {
+      log(chalk.bold.yellow('WARNING:') + ' Could not determine GitHub token info.');
     }
   }
 
@@ -230,7 +253,9 @@ async function main(): Promise<void> {
     ghStateDir = mkdtempSync(join(tmpdir(), 'safe-claude-code-gh-'));
     mkdirSync(join(ghStateDir, 'config'), { recursive: true });
     mkdirSync(join(ghStateDir, 'state', 'gh'), { recursive: true });
-    log(c.green('OK:') + ` gh state dir: ${ghStateDir}`);
+    log(chalk.bold.green('OK:') + ` gh state dir: ${ghStateDir}`);
+
+    claudeDirs.push(ghStateDir);
   }
 
   // ── GCP setup ─────────────────────────────────────────────────────────────
@@ -249,8 +274,8 @@ async function main(): Promise<void> {
       log('Fetching GCP project list…');
       const { projects, error: listError } = await listProjects();
       if (listError) {
-        log(c.yellow('WARNING:') + ' Could not list projects — enter project ID manually.');
-        log(c.yellow('REASON:') + ' ' + listError);
+        log(chalk.bold.yellow('WARNING:') + ' Could not list projects — enter project ID manually.');
+        log(chalk.bold.yellow('REASON:') + ' ' + listError);
       }
       const folderName = basename(process.cwd()).toLowerCase();
       const initialValue = projects.find(p => p.toLowerCase().startsWith(folderName)) ?? '';
@@ -259,7 +284,7 @@ async function main(): Promise<void> {
         <ProjectSelector projects={projects} initialValue={initialValue} onSelect={(p) => { selected = p; }} />,
         () => {
           if (!selected) {
-            log(c.red('Aborted.'));
+            log(chalk.bold.red('Aborted.'));
             process.exit(1);
           }
           return selected;
@@ -270,14 +295,14 @@ async function main(): Promise<void> {
     const sa = `claude-code@${projectId}.iam.gserviceaccount.com`;
 
     // Verify service account
-    log(`\nChecking for service account ${c.bold(sa)}…`);
+    log(`\nChecking for service account ${chalk.bold(sa)}…`);
     try {
       await $`gcloud iam service-accounts describe ${sa} --project=${projectId}`;
     } catch {
-      log(c.red('ERROR:') + ` Service account ${sa} not found in project ${projectId}.`);
+      log(chalk.bold.red('ERROR:') + ` Service account ${sa} not found in project ${projectId}.`);
       process.exit(1);
     }
-    log(c.green('OK:') + ' Service account found.');
+    log(chalk.bold.green('OK:') + ' Service account found.');
 
     // List roles
     log(`\nRoles assigned to ${sa}:`);
@@ -291,15 +316,16 @@ async function main(): Promise<void> {
     }
 
     if (roles.length === 0) {
-      log(c.yellow('WARNING:') + ' No project-level roles found for this service account.');
+      log(chalk.bold.yellow('WARNING:') + ' No project-level roles found for this service account.');
     } else {
       for (const role of roles) {
         log(`  • ${role}`);
       }
+      systemPromptParts.push(`GCP IAM roles (project: ${projectId}): ${roles.join(', ')}`);
     }
 
     if (!roles.includes('roles/run.admin')) {
-      log(`\n${c.blue('INFO:')} To deploy to Cloud Run, grant run.admin:`);
+      log(`\n${chalk.bold.blue('INFO:')} To deploy to Cloud Run, grant run.admin:`);
       log(`  gcloud projects add-iam-policy-binding ${projectId} \\`);
       log(`    --member="serviceAccount:${sa}" \\`);
       log(`    --role="roles/run.admin"`);
@@ -315,7 +341,7 @@ async function main(): Promise<void> {
       () => confirmed,
     );
     if (!confirmed) {
-      log(c.red('Aborted.'));
+      log(chalk.bold.red('Aborted.'));
       process.exit(1);
     }
 
@@ -330,7 +356,7 @@ async function main(): Promise<void> {
         const acc = await $`gcloud config get-value account`;
         currentAccount = acc.stdout.trim();
       } catch { /* ignore */ }
-      log(c.red('ERROR:') + ' Failed to generate access token.');
+      log(chalk.bold.red('ERROR:') + ' Failed to generate access token.');
       log('To grant impersonation rights, run:\n');
       log(`  gcloud iam service-accounts add-iam-policy-binding ${sa} \\`);
       log(`    --member="user:${currentAccount}" \\`);
@@ -344,9 +370,9 @@ async function main(): Promise<void> {
     log('Enabling required APIs…');
     try {
       await $`gcloud services enable cloudresourcemanager.googleapis.com --project=${projectId} --impersonate-service-account=${sa}`;
-      log(c.green('OK:') + ' cloudresourcemanager.googleapis.com');
+      log(chalk.bold.green('OK:') + ' cloudresourcemanager.googleapis.com');
     } catch {
-      log(c.yellow('WARNING:') + ' Could not enable cloudresourcemanager.googleapis.com (may already be enabled or insufficient permissions).');
+      log(chalk.bold.yellow('WARNING:') + ' Could not enable cloudresourcemanager.googleapis.com (may already be enabled or insufficient permissions).');
     }
 
     // Write gcloud config and ADC
@@ -391,8 +417,10 @@ async function main(): Promise<void> {
       { mode: 0o600 },
     );
 
-    log(c.green('Environment ready.') + ` gcloud config: ${configDir}`);
-    log(c.green('OK:') + ` ADC configured via ${sa} (valid until ${tokenExpiry} UTC).`);
+    log(chalk.bold.green('Environment ready.') + ` gcloud config: ${configDir}`);
+    log(chalk.bold.green('OK:') + ` ADC configured via ${sa} (valid until ${tokenExpiry} UTC).`);
+
+    claudeDirs.push(configDir);
   }
 
   // ── bwrap wrapper: strip --unshare-net ────────────────────────────────────
@@ -416,7 +444,14 @@ async function main(): Promise<void> {
   // ── Launch Claude Code ─────────────────────────────────────────────────────
   log('Launching Claude Code…\n');
 
-  const result = spawnSync('claude', [], {
+  const claudeArgs: string[] = [
+    ...claudeDirs.flatMap(d => ['--add-dir', d]),
+    ...(systemPromptParts.length > 0
+      ? ['--append-system-prompt', systemPromptParts.join('\n')]
+      : []),
+  ];
+
+  const result = spawnSync('claude', claudeArgs, {
     stdio: 'inherit',
     env: {
       ...process.env,
@@ -441,6 +476,6 @@ async function main(): Promise<void> {
 
 main().catch((e: unknown) => {
   const msg = e instanceof Error ? e.message : String(e);
-  log(c.red('ERROR:') + ' ' + msg);
+  log(chalk.bold.red('ERROR:') + ' ' + msg);
   process.exit(1);
 });

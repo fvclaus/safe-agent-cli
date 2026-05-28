@@ -24,6 +24,7 @@
  *   allowRead  → same as read.allowWithinDeny
  */
 
+import chalk from 'chalk';
 import {
   mkdtempSync,
   mkdirSync,
@@ -42,13 +43,6 @@ import { $ } from 'zx';
 
 $.verbose = false;
 
-const c = {
-  red:    (s: string) => `\x1b[1;31m${s}\x1b[0m`,
-  green:  (s: string) => `\x1b[1;32m${s}\x1b[0m`,
-  yellow: (s: string) => `\x1b[1;33m${s}\x1b[0m`,
-  blue:   (s: string) => `\x1b[1;34m${s}\x1b[0m`,
-  bold:   (s: string) => `\x1b[1m${s}\x1b[0m`,
-};
 const log = (msg: string) => process.stderr.write(msg + '\n');
 
 // ── Paths ─────────────────────────────────────────────────────────────────────
@@ -217,27 +211,29 @@ function buildBwrapArgs(cfg: SandboxFsConfig, command: string): string[] {
   return args;
 }
 
-// ── GCP setup (mirrors src/index.tsx) ────────────────────────────────────────
-async function setupGcp(): Promise<{
-  configDir: string;
-  adcFile: string;
-  gcpToken: string;
+// ── Integration setup result ──────────────────────────────────────────────────
+interface SetupResult {
   envVars: Record<string, string>;
-}> {
+  /** Directories that need to be added to the sandbox write-allow list. */
+  dirs: string[];
+}
+
+// ── GCP setup (mirrors src/index.tsx) ────────────────────────────────────────
+async function setupGcp(): Promise<SetupResult & { configDir: string; adcFile: string; gcpToken: string }> {
   if (!projectId) {
-    log(c.red('ERROR:') + ' --gcp requires --project PROJECT_ID for the test harness.');
+    log(chalk.bold.red('ERROR:') + ' --gcp requires --project PROJECT_ID for the test harness.');
     process.exit(1);
   }
   const sa = `claude-code@${projectId}.iam.gserviceaccount.com`;
 
-  log(`\nChecking for service account ${c.bold(sa)}…`);
+  log(`\nChecking for service account ${chalk.bold(sa)}…`);
   try {
     await $`gcloud iam service-accounts describe ${sa} --project=${projectId}`;
   } catch {
-    log(c.red('ERROR:') + ` Service account ${sa} not found in project ${projectId}.`);
+    log(chalk.bold.red('ERROR:') + ` Service account ${sa} not found in project ${projectId}.`);
     process.exit(1);
   }
-  log(c.green('OK:') + ' Service account found.');
+  log(chalk.bold.green('OK:') + ' Service account found.');
 
   log(`\nGenerating access token for ${sa}…`);
   let gcpToken = '';
@@ -245,7 +241,7 @@ async function setupGcp(): Promise<{
     const out = await $`gcloud auth print-access-token --impersonate-service-account=${sa}`;
     gcpToken = out.stdout.trim();
   } catch {
-    log(c.red('ERROR:') + ' Failed to generate access token.');
+    log(chalk.bold.red('ERROR:') + ' Failed to generate access token.');
     process.exit(1);
   }
 
@@ -270,7 +266,7 @@ async function setupGcp(): Promise<{
     { mode: 0o600 },
   );
 
-  log(c.green('OK:') + ` GCP env ready (${sa}, expires ${tokenExpiry} UTC).`);
+  log(chalk.bold.green('OK:') + ` GCP env ready (${sa}, expires ${tokenExpiry} UTC).`);
   return {
     configDir, adcFile, gcpToken,
     envVars: {
@@ -279,25 +275,22 @@ async function setupGcp(): Promise<{
       FIREBASE_TOKEN: gcpToken,
       GOOGLE_APPLICATION_CREDENTIALS: adcFile,
     },
+    dirs: [configDir],
   };
 }
 
 // ── GitHub setup (mirrors src/index.tsx) ─────────────────────────────────────
-async function setupGh(): Promise<{
-  ghStateDir: string;
-  githubToken: string;
-  envVars: Record<string, string>;
-}> {
+async function setupGh(): Promise<SetupResult & { ghStateDir: string; githubToken: string }> {
   const folderName = basename(cwd);
-  log(`\nLooking up GitHub PAT for ${c.bold(folderName)}…`);
+  log(`\nLooking up GitHub PAT for ${chalk.bold(folderName)}…`);
   let githubToken = '';
   try {
     const out = await $`secret-tool lookup github.pat ${folderName}`;
     githubToken = out.stdout.trim();
     if (!githubToken) throw new Error('empty');
-    log(c.green('OK:') + ' GitHub PAT found.');
+    log(chalk.bold.green('OK:') + ' GitHub PAT found.');
   } catch {
-    log(c.red('ERROR:') + ` No GitHub PAT found for "${folderName}".`);
+    log(chalk.bold.red('ERROR:') + ` No GitHub PAT found for "${folderName}".`);
     log(`  secret-tool store --label="Github PAT ${folderName}" github.pat ${folderName}`);
     process.exit(1);
   }
@@ -313,6 +306,7 @@ async function setupGh(): Promise<{
       GH_CONFIG_DIR: join(ghStateDir, 'config'),
       XDG_STATE_HOME: join(ghStateDir, 'state'),
     },
+    dirs: [ghStateDir],
   };
 }
 
@@ -324,16 +318,22 @@ async function main() {
   let configDir: string | undefined;
   let ghStateDir: string | undefined;
 
+  const cfg = loadSandboxConfig();
+
   if (useGcp) {
     const gcp = await setupGcp();
     configDir = gcp.configDir;
     extraEnv = { ...extraEnv, ...gcp.envVars };
+    cfg.writeAllowOnly.push(...gcp.dirs);
+    cfg.readAllowWithinDeny.push(...gcp.dirs);
   }
 
   if (useGh) {
     const gh = await setupGh();
     ghStateDir = gh.ghStateDir;
     extraEnv = { ...extraEnv, ...gh.envVars };
+    cfg.writeAllowOnly.push(...gh.dirs);
+    cfg.readAllowWithinDeny.push(...gh.dirs);
   }
 
   const cleanup = () => {
@@ -344,10 +344,9 @@ async function main() {
   process.on('SIGINT',  () => { cleanup(); process.exit(130); });
   process.on('SIGTERM', () => { cleanup(); process.exit(143); });
 
-  const cfg = loadSandboxConfig();
   const bwrapArgs = buildBwrapArgs(cfg, userCommand);
 
-  log(`${c.blue('[sandbox]')} ${userCommand}\n`);
+  log(`${chalk.blue('[sandbox]')} ${userCommand}\n`);
 
   const result = spawnSync(join(binDir, 'bwrap'), bwrapArgs, {
     stdio: 'inherit',
@@ -364,6 +363,6 @@ async function main() {
 }
 
 main().catch((e: unknown) => {
-  log(c.red('ERROR:') + ' ' + (e instanceof Error ? e.message : String(e)));
+  log(chalk.bold.red('ERROR:') + ' ' + (e instanceof Error ? e.message : String(e)));
   process.exit(1);
 });
