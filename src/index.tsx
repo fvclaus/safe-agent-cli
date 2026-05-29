@@ -493,6 +493,12 @@ async function main(): Promise<void> {
     ...(Object.keys(credentialEnv).length > 0
       ? ['--settings', JSON.stringify({ env: credentialEnv })]
       : []),
+    // NOTE: --append-system-prompt only applies to the main session.
+    // Agents dispatched from the agent view do NOT inherit it — Claude Code
+    // has no settings.json equivalent for appending to the system prompt.
+    // To propagate dynamic content to agents, the workaround is to write it
+    // to a temp output-style file (~/.claude/output-styles/) and reference it
+    // via "outputStyle" in --settings, but this is not yet implemented.
     ...(systemPromptParts.length > 0
       ? ['--append-system-prompt', systemPromptParts.join('\n')]
       : []),
