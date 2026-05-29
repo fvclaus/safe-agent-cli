@@ -215,7 +215,9 @@ async function main(): Promise<void> {
       log(chalk.bold.green('OK:') + ' GitHub PAT found.');
     } catch {
       log(chalk.bold.red('ERROR:') + ` No GitHub PAT found for "${folderName}".`);
-      log('To store one, run:');
+      log('Create a fine-grained PAT (contents, pull_requests, actions, workflows — read & write):');
+      log(`  https://github.com/settings/personal-access-tokens/new?name=${encodeURIComponent(folderName)}&expires_in=366&contents=write&pull_requests=write&actions=write&workflows=write`);
+      log('Then store it with:');
       log(`  secret-tool store --label="Github PAT ${folderName}" github.pat ${folderName}`);
       process.exit(1);
     }
@@ -235,9 +237,20 @@ async function main(): Promise<void> {
         const scopeList = scopes.split(',').map(s => s.trim()).filter(Boolean);
         ghPermissionInfo = `GITHUB_TOKEN is a classic PAT with scopes: ${scopeList.join(', ') || '(none)'}`;
       } else {
-        // Fine-grained PATs do not expose permissions via the API; they are
-        // configured per-repository in the GitHub UI.
-        ghPermissionInfo = `GITHUB_TOKEN is a fine-grained PAT${expiry ? ` (expires ${expiry})` : ''}. Permissions are configured per-repository in the GitHub UI and cannot be read via the API — assume access is limited to what was explicitly granted when the token was created.`;
+        // Fine-grained PATs do not expose permissions via the API.
+        // Run `gh repo list` to discover which repositories are accessible.
+        let repoInfo = '';
+        try {
+          const repoOut = await $({ env: { ...process.env, GITHUB_TOKEN: githubToken } })`gh repo list --limit 100 --json nameWithOwner`;
+          const repos = (JSON.parse(repoOut.stdout) as { nameWithOwner: string }[]).map(r => r.nameWithOwner);
+          if (repos.length > 0) {
+            repoInfo = ` Accessible repositories (${repos.length}): ${repos.join(', ')}.`;
+          }
+        } catch { /* non-fatal */ }
+        ghPermissionInfo = `GITHUB_TOKEN is a fine-grained PAT${expiry ? ` (expires ${expiry})` : ''}. ` +
+          `It was created with at least these repository permissions: contents (read & write), pull_requests (read & write), actions (read & write), workflows (read & write). ` +
+          `Additional permissions may have been granted beyond these.` +
+          repoInfo;
       }
     } catch { /* non-fatal */ }
 
