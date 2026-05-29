@@ -3,7 +3,7 @@ import React, { useState, useMemo } from 'react';
 import { render, Box, Text, useApp, useInput } from 'ink';
 import { object } from '@optique/core/constructs';
 import { optional } from '@optique/core/modifiers';
-import { argument, flag } from '@optique/core/primitives';
+import { flag, option, passThrough } from '@optique/core/primitives';
 import { string } from '@optique/core/valueparser';
 import { message } from '@optique/core/message';
 import { run } from '@optique/run';
@@ -179,7 +179,8 @@ async function main(): Promise<void> {
       googleCloud: optional(flag('--google-cloud')),
       gh:          optional(flag('--gh')),
       github:      optional(flag('--github')),
-      project:     optional(argument(string({ metavar: 'PROJECT_ID' }))),
+      project:     optional(option('--project', string({ metavar: 'PROJECT_ID' }))),
+      rest:        passThrough({ format: 'greedy', description: message`Extra arguments forwarded to claude.` }),
     }),
     {
       programName: 'safe-claude-code',
@@ -232,15 +233,22 @@ async function main(): Promise<void> {
       const expiry = resp.headers.get('github-authentication-token-expiration');
       if (scopes !== null) {
         const scopeList = scopes.split(',').map(s => s.trim()).filter(Boolean);
-        ghPermissionInfo = `GitHub classic PAT scopes: ${scopeList.join(', ') || '(none)'}`;
+        ghPermissionInfo = `GITHUB_TOKEN is a classic PAT with scopes: ${scopeList.join(', ') || '(none)'}`;
       } else {
-        ghPermissionInfo = `GitHub fine-grained PAT${expiry ? `, expires ${expiry}` : ''}`;
+        // Fine-grained PATs do not expose permissions via the API; they are
+        // configured per-repository in the GitHub UI.
+        ghPermissionInfo = `GITHUB_TOKEN is a fine-grained PAT${expiry ? ` (expires ${expiry})` : ''}. Permissions are configured per-repository in the GitHub UI and cannot be read via the API — assume access is limited to what was explicitly granted when the token was created.`;
       }
     } catch { /* non-fatal */ }
 
     if (ghPermissionInfo) {
       log(chalk.bold.green('OK:') + ` ${ghPermissionInfo}`);
-      systemPromptParts.push(ghPermissionInfo);
+      systemPromptParts.push(
+        `GitHub credentials are available via environment variables. ` +
+        `The environment variable GITHUB_TOKEN is set to a GitHub PAT, and the gh CLI is ready to use ` +
+        `(its config and state directories are pointed at a temporary location via the environment variables GH_CONFIG_DIR and XDG_STATE_HOME). ` +
+        ghPermissionInfo
+      );
     } else {
       log(chalk.bold.yellow('WARNING:') + ' Could not determine GitHub token info.');
     }
@@ -321,7 +329,14 @@ async function main(): Promise<void> {
       for (const role of roles) {
         log(`  • ${role}`);
       }
-      systemPromptParts.push(`GCP IAM roles (project: ${projectId}): ${roles.join(', ')}`);
+      systemPromptParts.push(
+        `GCP credentials are available via environment variables. ` +
+        `The environment variable GOOGLE_OAUTH_ACCESS_TOKEN is set to a short-lived access token, ` +
+        `GOOGLE_APPLICATION_CREDENTIALS points to an Application Default Credentials file, ` +
+        `and CLOUDSDK_CONFIG points to a gcloud configuration directory — all scoped to the ` +
+        `service account ${sa} in project ${projectId}. ` +
+        `The service account has the following IAM roles on the project: ${roles.join(', ')}.`
+      );
     }
 
     if (!roles.includes('roles/run.admin')) {
@@ -442,13 +457,46 @@ async function main(): Promise<void> {
   process.on('SIGTERM', () => { cleanup(); process.exit(143); });
 
   // ── Launch Claude Code ─────────────────────────────────────────────────────
+  // Credentials are injected in two complementary ways:
+  //
+  // 1. spawnSync `env` — makes vars available to claude and every descendant
+  //    process it spawns (bwrap sandboxes, bash tool calls, gcloud, terraform,
+  //    gh, …).  This is the standard Unix env-inheritance mechanism and covers
+  //    all direct tool use.
+  //
+  // 2. `--settings '{"env": {...}}'` — claude agents (background sessions
+  //    dispatched from the agent view) run in their own process tree and do
+  //    NOT inherit the env from the parent claude session.  Passing the same
+  //    vars via --settings ensures those sessions, and any sessions they
+  //    dispatch in turn, also receive the credentials.
+  //    NOTE: --settings is read once when an agent starts.  If credentials
+  //    change after launch, already-running agents are NOT affected — only
+  //    newly dispatched agents pick up the new values.
   log('Launching Claude Code…\n');
+
+  const credentialEnv: Record<string, string> = {
+    ...(configDir ? {
+      CLOUDSDK_CONFIG: configDir,
+      GOOGLE_OAUTH_ACCESS_TOKEN: gcpToken!,
+      FIREBASE_TOKEN: gcpToken!,
+      GOOGLE_APPLICATION_CREDENTIALS: adcFile!,
+    } : {}),
+    ...(githubToken !== undefined ? { GITHUB_TOKEN: githubToken } : {}),
+    ...(ghStateDir !== undefined ? {
+      GH_CONFIG_DIR: join(ghStateDir, 'config'),
+      XDG_STATE_HOME: join(ghStateDir, 'state'),
+    } : {}),
+  };
 
   const claudeArgs: string[] = [
     ...claudeDirs.flatMap(d => ['--add-dir', d]),
+    ...(Object.keys(credentialEnv).length > 0
+      ? ['--settings', JSON.stringify({ env: credentialEnv })]
+      : []),
     ...(systemPromptParts.length > 0
       ? ['--append-system-prompt', systemPromptParts.join('\n')]
       : []),
+    ...args.rest,
   ];
 
   const result = spawnSync('claude', claudeArgs, {
@@ -457,17 +505,7 @@ async function main(): Promise<void> {
       ...process.env,
       ['PATH']: `${binDir}:${process.env['PATH'] ?? ''}`,
       REAL_BWRAP: realBwrap,
-      ...(configDir ? {
-        CLOUDSDK_CONFIG: configDir,
-        GOOGLE_OAUTH_ACCESS_TOKEN: gcpToken!,
-        FIREBASE_TOKEN: gcpToken!,
-        GOOGLE_APPLICATION_CREDENTIALS: adcFile!,
-      } : {}),
-      ...(githubToken !== undefined ? { GITHUB_TOKEN: githubToken } : {}),
-      ...(ghStateDir !== undefined ? {
-        GH_CONFIG_DIR: join(ghStateDir, 'config'),
-        XDG_STATE_HOME: join(ghStateDir, 'state'),
-      } : {}),
+      ...credentialEnv,
     },
   });
   if (result.error) throw result.error;
