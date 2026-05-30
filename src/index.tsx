@@ -18,7 +18,7 @@ import {
   existsSync,
   readFileSync,
 } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { tmpdir, homedir } from 'node:os';
 import { join, basename } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawnSync } from 'node:child_process';
@@ -120,6 +120,29 @@ async function inkPrompt<T>(element: React.ReactElement, resolve: () => T): Prom
   const { waitUntilExit } = render(element);
   await waitUntilExit();
   return resolve();
+}
+
+// ─── settings.json validation ────────────────────────────────────────────────
+function verifySettingsJson(): void {
+  const paths = [
+    join(homedir(), '.claude', 'settings.json'),
+    join(process.cwd(), '.claude', 'settings.json'),
+    join(process.cwd(), '.claude', 'settings.local.json'),
+  ];
+
+  let hasError = false;
+  for (const p of paths) {
+    if (!existsSync(p)) continue;
+    try {
+      JSON.parse(readFileSync(p, 'utf8'));
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      log(chalk.bold.red('ERROR:') + ` ${p} contains invalid JSON: ${msg}`);
+      log('Claude Code silently ignores malformed settings files — fix it before launching.');
+      hasError = true;
+    }
+  }
+  if (hasError) process.exit(1);
 }
 
 // ─── Sandbox enforcement ──────────────────────────────────────────────────────
@@ -471,6 +494,9 @@ async function main(): Promise<void> {
 
     claudeDirs.push(configDir);
   }
+
+  // ── Validate all settings.json files ─────────────────────────────────────
+  verifySettingsJson();
 
   // ── Ensure sandbox is enabled in local settings ───────────────────────────
   ensureSandboxEnabled();
