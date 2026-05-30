@@ -15,6 +15,8 @@ import {
   writeFileSync,
   rmSync,
   chmodSync,
+  existsSync,
+  readFileSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, basename } from 'node:path';
@@ -118,6 +120,30 @@ async function inkPrompt<T>(element: React.ReactElement, resolve: () => T): Prom
   const { waitUntilExit } = render(element);
   await waitUntilExit();
   return resolve();
+}
+
+// ─── Sandbox enforcement ──────────────────────────────────────────────────────
+function ensureSandboxEnabled(): void {
+  const settingsPath = join(process.cwd(), '.claude', 'settings.local.json');
+  let settings: Record<string, unknown> = {};
+
+  if (existsSync(settingsPath)) {
+    try {
+      settings = JSON.parse(readFileSync(settingsPath, 'utf8')) as Record<string, unknown>;
+    } catch {
+      log(chalk.bold.yellow('WARNING:') + ` Could not parse ${settingsPath} — overwriting.`);
+    }
+  }
+
+  const sandbox = (settings['sandbox'] ?? {}) as Record<string, unknown>;
+  if (sandbox['enabled'] === true) return;
+
+  sandbox['enabled'] = true;
+  settings['sandbox'] = sandbox;
+
+  mkdirSync(join(process.cwd(), '.claude'), { recursive: true });
+  writeFileSync(settingsPath, JSON.stringify(settings, null, 2) + '\n', 'utf8');
+  log(chalk.bold.green('OK:') + ` sandbox.enabled set to true in ${settingsPath}`);
 }
 
 // ─── Snap detection ───────────────────────────────────────────────────────────
@@ -450,6 +476,9 @@ async function main(): Promise<void> {
 
     claudeDirs.push(configDir);
   }
+
+  // ── Ensure sandbox is enabled in local settings ───────────────────────────
+  ensureSandboxEnabled();
 
   // ── bwrap wrapper: strip --unshare-net ────────────────────────────────────
   const realBwrap = spawnSync('which', ['bwrap'], { encoding: 'utf8' }).stdout.trim() || '/usr/bin/bwrap';
