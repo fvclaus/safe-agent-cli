@@ -235,27 +235,43 @@ async function main(): Promise<void> {
       const expiry = resp.headers.get('github-authentication-token-expiration');
       if (scopes !== null) {
         const scopeList = scopes.split(',').map(s => s.trim()).filter(Boolean);
+        log(chalk.bold.green('OK:') + ' GITHUB_TOKEN is a classic PAT.');
+        log(`  Scopes: ${scopeList.join(', ') || '(none)'}`);
         ghPermissionInfo = `GITHUB_TOKEN is a classic PAT with scopes: ${scopeList.join(', ') || '(none)'}`;
       } else {
-        // Fine-grained PATs do not expose permissions via the API.
-        // Run `gh repo list` to discover which repositories are accessible.
-        let repoInfo = '';
+        // Fine-grained PATs do not expose granted permissions via the API.
+        // Use the REST API directly (not gh CLI) so that the user's normal gh
+        // session cannot bleed in — only the PAT is sent via the Authorization
+        // header, and GitHub returns only the repositories the PAT can access.
+        let repos: string[] = [];
         try {
-          const repoOut = await $({ env: { ...process.env, GITHUB_TOKEN: githubToken } })`gh repo list --limit 100 --json nameWithOwner`;
-          const repos = (JSON.parse(repoOut.stdout) as { nameWithOwner: string }[]).map(r => r.nameWithOwner);
-          if (repos.length > 0) {
-            repoInfo = ` Accessible repositories (${repos.length}): ${repos.join(', ')}.`;
-          }
+          const reposResp = await fetch('https://api.github.com/user/repos?per_page=100&sort=full_name', {
+            headers: { Authorization: `token ${githubToken}` },
+          });
+          repos = (await reposResp.json() as { full_name: string }[]).map(r => r.full_name);
         } catch { /* non-fatal */ }
+
+        log(chalk.bold.green('OK:') + ' GITHUB_TOKEN is a fine-grained PAT.');
+        if (expiry) log(`  Expires:     ${expiry}`);
+        log('  Permissions: contents (read & write), pull_requests (read & write),');
+        log('               actions (read & write), workflows (read & write)');
+        log('               (these are the minimum required; additional permissions may have been granted)');
+        if (repos.length > 0) {
+          log(`  Repositories (${repos.length}):`);
+          for (const repo of repos) log(`    • ${repo}`);
+        }
+
+        const repoSummary = repos.length > 0
+          ? ` Accessible repositories (${repos.length}): ${repos.join(', ')}.`
+          : '';
         ghPermissionInfo = `GITHUB_TOKEN is a fine-grained PAT${expiry ? ` (expires ${expiry})` : ''}. ` +
           `It was created with at least these repository permissions: contents (read & write), pull_requests (read & write), actions (read & write), workflows (read & write). ` +
           `Additional permissions may have been granted beyond these.` +
-          repoInfo;
+          repoSummary;
       }
     } catch { /* non-fatal */ }
 
     if (ghPermissionInfo) {
-      log(chalk.bold.green('OK:') + ` ${ghPermissionInfo}`);
       systemPromptParts.push(
         `GitHub credentials are available via environment variables. ` +
         `The environment variable GITHUB_TOKEN is set to a GitHub PAT, and the gh CLI is ready to use ` +
@@ -274,7 +290,6 @@ async function main(): Promise<void> {
     ghStateDir = mkdtempSync(join(tmpdir(), 'safe-claude-code-gh-'));
     mkdirSync(join(ghStateDir, 'config'), { recursive: true });
     mkdirSync(join(ghStateDir, 'state', 'gh'), { recursive: true });
-    log(chalk.bold.green('OK:') + ` gh state dir: ${ghStateDir}`);
 
     claudeDirs.push(ghStateDir);
   }
