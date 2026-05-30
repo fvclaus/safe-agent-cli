@@ -251,6 +251,14 @@ async function main(): Promise<void> {
           repos = (await reposResp.json() as { full_name: string }[]).map(r => r.full_name);
         } catch { /* non-fatal */ }
 
+        const repoSummary = repos.length > 0
+          ? ` Accessible repositories (${repos.length}): ${repos.join(', ')}.`
+          : '';
+        ghPermissionInfo = `GITHUB_TOKEN is a fine-grained PAT${expiry ? ` (expires ${expiry})` : ''}. ` +
+          `It was created with at least these repository permissions: contents (read & write), pull_requests (read & write), actions (read & write), workflows (read & write). ` +
+          `Additional permissions may have been granted beyond these.` +
+          repoSummary;
+
         log(chalk.bold.green('OK:') + ' GITHUB_TOKEN is a fine-grained PAT.');
         if (expiry) log(`  Expires:     ${expiry}`);
         log('  Permissions: contents (read & write), pull_requests (read & write),');
@@ -260,14 +268,6 @@ async function main(): Promise<void> {
           log(`  Repositories (${repos.length}):`);
           for (const repo of repos) log(`    • ${repo}`);
         }
-
-        const repoSummary = repos.length > 0
-          ? ` Accessible repositories (${repos.length}): ${repos.join(', ')}.`
-          : '';
-        ghPermissionInfo = `GITHUB_TOKEN is a fine-grained PAT${expiry ? ` (expires ${expiry})` : ''}. ` +
-          `It was created with at least these repository permissions: contents (read & write), pull_requests (read & write), actions (read & write), workflows (read & write). ` +
-          `Additional permissions may have been granted beyond these.` +
-          repoSummary;
       }
     } catch { /* non-fatal */ }
 
