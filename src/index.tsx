@@ -238,7 +238,6 @@ async function main(): Promise<void> {
       const out = await $`secret-tool lookup github.pat ${folderName}`;
       githubToken = out.stdout.trim();
       if (!githubToken) throw new Error('empty');
-      log(chalk.bold.green('OK:') + ' GitHub PAT found.');
     } catch {
       log(chalk.bold.red('ERROR:') + ` No GitHub PAT found for "${folderName}".`);
       log('Create a fine-grained PAT (contents, pull_requests, actions, workflows — read & write):');
@@ -251,7 +250,6 @@ async function main(): Promise<void> {
     // Query token info so Claude knows its GitHub permissions upfront.
     // Classic PATs return x-oauth-scopes; fine-grained PATs return null for that
     // header but include a github-authentication-token-expiration header instead.
-    log('Fetching GitHub token info…');
     let ghPermissionInfo = '';
     try {
       const resp = await fetch('https://api.github.com/user', {
@@ -266,34 +264,16 @@ async function main(): Promise<void> {
         ghPermissionInfo = `GITHUB_TOKEN is a classic PAT with scopes: ${scopeList.join(', ') || '(none)'}`;
       } else {
         // Fine-grained PATs do not expose granted permissions via the API.
-        // Use the REST API directly (not gh CLI) so that the user's normal gh
-        // session cannot bleed in — only the PAT is sent via the Authorization
-        // header, and GitHub returns only the repositories the PAT can access.
-        let repos: string[] = [];
-        try {
-          const reposResp = await fetch('https://api.github.com/user/repos?per_page=100&sort=full_name', {
-            headers: { Authorization: `token ${githubToken}` },
-          });
-          repos = (await reposResp.json() as { full_name: string }[]).map(r => r.full_name);
-        } catch { /* non-fatal */ }
-
-        const repoSummary = repos.length > 0
-          ? ` Accessible repositories (${repos.length}): ${repos.join(', ')}.`
-          : '';
+        // The REST api returns public repositories as well which just pollutes the results.
         ghPermissionInfo = `GITHUB_TOKEN is a fine-grained PAT${expiry ? ` (expires ${expiry})` : ''}. ` +
           `It was created with at least these repository permissions: contents (read & write), pull_requests (read & write), actions (read & write), workflows (read & write). ` +
-          `Additional permissions may have been granted beyond these.` +
-          repoSummary;
-
+          `Additional permissions may have been granted beyond these.`;
+ 
         log(chalk.bold.green('OK:') + ' GITHUB_TOKEN is a fine-grained PAT.');
         if (expiry) log(`  Expires:     ${expiry}`);
         log('  Permissions: contents (read & write), pull_requests (read & write),');
         log('               actions (read & write), workflows (read & write)');
         log('               (these are the minimum required; additional permissions may have been granted)');
-        if (repos.length > 0) {
-          log(`  Repositories (${repos.length}):`);
-          for (const repo of repos) log(`    • ${repo}`);
-        }
       }
     } catch { /* non-fatal */ }
 
