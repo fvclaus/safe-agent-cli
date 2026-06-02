@@ -264,7 +264,7 @@ async function main(): Promise<void> {
     } catch {
       log(chalk.bold.red('ERROR:') + ` No GitHub PAT found for "${folderName}".`);
       log('Create a fine-grained PAT (contents, pull_requests, actions, workflows — read & write):');
-      log(`  https://github.com/settings/personal-access-tokens/new?name=${encodeURIComponent(folderName)}&expires_in=366&contents=write&pull_requests=write&actions=write&workflows=write`);
+      log(`  https://github.com/settings/personal-access-tokens/new?name=${encodeURIComponent(folderName)}&expires_in=366&issues=write&contents=write&pull_requests=write&actions=write&workflows=write`);
       log('Then store it with:');
       log(`  secret-tool store --label="Github PAT ${folderName}" github.pat ${folderName}`);
       process.exit(1);
