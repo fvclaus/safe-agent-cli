@@ -1,7 +1,7 @@
 #!/usr/bin/env bun
 import React, { useState, useMemo } from 'react';
 import { render, Box, Text, useApp, useInput } from 'ink';
-import { object } from '@optique/core/constructs';
+import { object, or } from '@optique/core/constructs';
 import { optional } from '@optique/core/modifiers';
 import { flag, option, passThrough } from '@optique/core/primitives';
 import { string } from '@optique/core/valueparser';
@@ -226,8 +226,10 @@ async function main(): Promise<void> {
     object({
       gcp:         optional(flag('--gcp')),
       googleCloud: optional(flag('--google-cloud')),
-      gh:          optional(flag('--gh')),
-      github:      optional(flag('--github')),
+      // flag() first so `--gh <claude-arg>` never swallows the next token;
+      // an explicit PAT name therefore requires the `--gh=NAME` form.
+      gh:          optional(or(flag('--gh'), option('--gh', string({ metavar: 'PAT_NAME' })))),
+      github:      optional(or(flag('--github'), option('--github', string({ metavar: 'PAT_NAME' })))),
       project:     optional(option('--project', string({ metavar: 'PROJECT_ID' }))),
       rest:        passThrough({ format: 'greedy', description: message`Extra arguments forwarded to claude.` }),
     }),
@@ -245,7 +247,8 @@ async function main(): Promise<void> {
 
   // ── Resolve GitHub PAT ─────────────────────────────────────────────────────
   let githubToken: string | undefined;
-  if (args.gh || args.github) {
+  const ghArg = args.gh ?? args.github;
+  if (ghArg !== undefined) {
     abortIfSnap('gh', 'https://cli.github.com');
     const secretToolAvailable = spawnSync('which', ['secret-tool'], { encoding: 'utf8' }).status === 0;
     if (!secretToolAvailable) {
@@ -255,18 +258,18 @@ async function main(): Promise<void> {
       process.exit(1);
     }
 
-    const folderName = basename(process.cwd());
-    log(`\nLooking up GitHub PAT for ${chalk.bold(folderName)}…`);
+    const patName = typeof ghArg === 'string' ? ghArg : basename(process.cwd());
+    log(`\nLooking up GitHub PAT for ${chalk.bold(patName)}…`);
     try {
-      const out = await $`secret-tool lookup github.pat ${folderName}`;
+      const out = await $`secret-tool lookup github.pat ${patName}`;
       githubToken = out.stdout.trim();
       if (!githubToken) throw new Error('empty');
     } catch {
-      log(chalk.bold.red('ERROR:') + ` No GitHub PAT found for "${folderName}".`);
+      log(chalk.bold.red('ERROR:') + ` No GitHub PAT found for "${patName}".`);
       log('Create a fine-grained PAT (contents, pull_requests, actions, workflows — read & write):');
-      log(`  https://github.com/settings/personal-access-tokens/new?name=${encodeURIComponent(folderName)}&expires_in=366&issues=write&contents=write&pull_requests=write&actions=write&workflows=write`);
+      log(`  https://github.com/settings/personal-access-tokens/new?name=${encodeURIComponent(patName)}&expires_in=366&issues=write&contents=write&pull_requests=write&actions=write&workflows=write`);
       log('Then store it with:');
-      log(`  secret-tool store --label="Github PAT ${folderName}" github.pat ${folderName}`);
+      log(`  secret-tool store --label="Github PAT ${patName}" github.pat ${patName}`);
       process.exit(1);
     }
 

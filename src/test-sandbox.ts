@@ -4,10 +4,11 @@
  * sandbox) but runs an arbitrary command instead of launching `claude`.
  *
  * Usage:
- *   bun src/test-sandbox.ts [--gcp [--project ID]] [--gh] <command>
+ *   bun src/test-sandbox.ts [--gcp [--project ID]] [--gh[=PAT_NAME]] <command>
  *   bun src/test-sandbox.ts bash          # interactive shell in the sandbox
  *   bun src/test-sandbox.ts --gcp --project my-project "gcloud projects list"
  *   bun src/test-sandbox.ts --gh "gh auth status"
+ *   bun src/test-sandbox.ts --gh=my-token "gh auth status"   # explicit PAT name
  *
  * Sandbox filesystem policy is read from (merged, in order):
  *   1. ~/.claude/settings.json  — long form: sandbox.filesystem.{read,write}.*
@@ -56,6 +57,7 @@ const realBwrap = spawnSync('which', ['bwrap'], { encoding: 'utf8' }).stdout.tri
 const rawArgs = process.argv.slice(2);
 let useGcp    = false;
 let useGh     = false;
+let ghPatName = '';
 let projectId = '';
 const cmdParts: string[] = [];
 
@@ -63,13 +65,14 @@ for (let i = 0; i < rawArgs.length; i++) {
   const a = rawArgs[i]!;
   if (a === '--gcp' || a === '--google-cloud') { useGcp = true; continue; }
   if (a === '--gh' || a === '--github')         { useGh  = true; continue; }
+  if (a.startsWith('--gh=') || a.startsWith('--github=')) { useGh = true; ghPatName = a.slice(a.indexOf('=') + 1); continue; }
   if (a === '--project') { projectId = rawArgs[++i] ?? ''; continue; }
   if (a.startsWith('--project=')) { projectId = a.slice('--project='.length); continue; }
   cmdParts.push(a);
 }
 
 if (cmdParts.length === 0) {
-  log('Usage: bun src/test-sandbox.ts [--gcp [--project ID]] [--gh] <command>');
+  log('Usage: bun src/test-sandbox.ts [--gcp [--project ID]] [--gh[=PAT_NAME]] <command>');
   process.exit(1);
 }
 const userCommand = cmdParts.join(' ');
@@ -280,18 +283,17 @@ async function setupGcp(): Promise<SetupResult & { configDir: string; adcFile: s
 }
 
 // ── GitHub setup (mirrors src/index.tsx) ─────────────────────────────────────
-async function setupGh(): Promise<SetupResult & { ghStateDir: string; githubToken: string }> {
-  const folderName = basename(cwd);
-  log(`\nLooking up GitHub PAT for ${chalk.bold(folderName)}…`);
+async function setupGh(patName: string): Promise<SetupResult & { ghStateDir: string; githubToken: string }> {
+  log(`\nLooking up GitHub PAT for ${chalk.bold(patName)}…`);
   let githubToken = '';
   try {
-    const out = await $`secret-tool lookup github.pat ${folderName}`;
+    const out = await $`secret-tool lookup github.pat ${patName}`;
     githubToken = out.stdout.trim();
     if (!githubToken) throw new Error('empty');
     log(chalk.bold.green('OK:') + ' GitHub PAT found.');
   } catch {
-    log(chalk.bold.red('ERROR:') + ` No GitHub PAT found for "${folderName}".`);
-    log(`  secret-tool store --label="Github PAT ${folderName}" github.pat ${folderName}`);
+    log(chalk.bold.red('ERROR:') + ` No GitHub PAT found for "${patName}".`);
+    log(`  secret-tool store --label="Github PAT ${patName}" github.pat ${patName}`);
     process.exit(1);
   }
 
@@ -329,7 +331,7 @@ async function main() {
   }
 
   if (useGh) {
-    const gh = await setupGh();
+    const gh = await setupGh(ghPatName || basename(cwd));
     ghStateDir = gh.ghStateDir;
     extraEnv = { ...extraEnv, ...gh.envVars };
     cfg.writeAllowOnly.push(...gh.dirs);
