@@ -1,14 +1,14 @@
 #!/usr/bin/env bun
 /**
- * Test harness: mirrors what src/index.tsx does (GCP/GitHub env setup + bwrap
- * sandbox) but runs an arbitrary command instead of launching `claude`.
+ * Test harness: mirrors the shared launcher setup (GCP/GitHub env setup + bwrap
+ * sandbox) but runs an arbitrary command instead of launching an agent CLI.
  *
  * Usage:
- *   bun src/test-sandbox.ts [--gcp [--project ID]] [--gh[=PAT_NAME]] <command>
- *   bun src/test-sandbox.ts bash          # interactive shell in the sandbox
- *   bun src/test-sandbox.ts --gcp --project my-project "gcloud projects list"
- *   bun src/test-sandbox.ts --gh "gh auth status"
- *   bun src/test-sandbox.ts --gh=my-token "gh auth status"   # explicit PAT name
+ *   bun scripts/test-sandbox.ts [--gcp [--project ID]] [--gh[=PAT_NAME]] <command>
+ *   bun scripts/test-sandbox.ts bash          # interactive shell in the sandbox
+ *   bun scripts/test-sandbox.ts --gcp --project my-project "gcloud projects list"
+ *   bun scripts/test-sandbox.ts --gh "gh auth status"
+ *   bun scripts/test-sandbox.ts --gh=my-token "gh auth status"   # explicit PAT name
  *
  * Sandbox filesystem policy is read from (merged, in order):
  *   1. ~/.claude/settings.json  — long form: sandbox.filesystem.{read,write}.*
@@ -49,11 +49,11 @@ const log = (msg: string) => process.stderr.write(msg + '\n');
 // ── Paths ─────────────────────────────────────────────────────────────────────
 const cwd  = process.cwd();
 const home = process.env['HOME'] ?? '/home/' + process.env['USER'];
-const binDir = join(fileURLToPath(new URL('.', import.meta.url)), 'bin');
+const binDir = join(fileURLToPath(new URL('../src/', import.meta.url)), 'bin');
 const realBwrap = spawnSync('which', ['bwrap'], { encoding: 'utf8' }).stdout.trim() || '/usr/bin/bwrap';
 
 // ── CLI args ──────────────────────────────────────────────────────────────────
-// Flags mirror src/index.tsx; everything not recognized is the command.
+// Flags mirror src/launcher/safe-agent-cli.tsx; everything not recognized is the command.
 const rawArgs = process.argv.slice(2);
 let useGcp    = false;
 let useGh     = false;
@@ -72,7 +72,7 @@ for (let i = 0; i < rawArgs.length; i++) {
 }
 
 if (cmdParts.length === 0) {
-  log('Usage: bun src/test-sandbox.ts [--gcp [--project ID]] [--gh[=PAT_NAME]] <command>');
+  log('Usage: bun scripts/test-sandbox.ts [--gcp [--project ID]] [--gh[=PAT_NAME]] <command>');
   process.exit(1);
 }
 const userCommand = cmdParts.join(' ');
@@ -221,7 +221,7 @@ interface SetupResult {
   dirs: string[];
 }
 
-// ── GCP setup (mirrors src/index.tsx) ────────────────────────────────────────
+// ── GCP setup (mirrors src/launcher/safe-agent-cli.tsx) ──────────────────────
 async function setupGcp(): Promise<SetupResult & { configDir: string; adcFile: string; gcpToken: string }> {
   if (!projectId) {
     log(chalk.bold.red('ERROR:') + ' --gcp requires --project PROJECT_ID for the test harness.');
@@ -282,7 +282,7 @@ async function setupGcp(): Promise<SetupResult & { configDir: string; adcFile: s
   };
 }
 
-// ── GitHub setup (mirrors src/index.tsx) ─────────────────────────────────────
+// ── GitHub setup (mirrors src/launcher/safe-agent-cli.tsx) ───────────────────
 async function setupGh(patName: string): Promise<SetupResult & { ghStateDir: string; githubToken: string }> {
   log(`\nLooking up GitHub PAT for ${chalk.bold(patName)}…`);
   let githubToken = '';
