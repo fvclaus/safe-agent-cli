@@ -21,8 +21,11 @@ while [ $i -lt ${#args[@]} ]; do
         gitdir_path="${gitdir_path%$'\r'}"
         # .git/worktrees/<name> -> .git (main repo git dir)
         main_git_dir="$(dirname "$(dirname "$gitdir_path")")"
-        extra_binds+=(--ro-bind "$gitdir_path" "$gitdir_path")
-        extra_binds+=(--ro-bind "$main_git_dir" "$main_git_dir")
+        # Both the main git dir and the worktree metadata dir need write access:
+        # main_git_dir (.git) for refs/heads, objects (commits), packed-refs
+        # gitdir_path (.git/worktrees/<name>) for HEAD, MERGE_HEAD, lock files
+        extra_binds+=(--bind "$main_git_dir" "$main_git_dir")
+        extra_binds+=(--bind "$gitdir_path" "$gitdir_path")
       fi
     fi
   fi
