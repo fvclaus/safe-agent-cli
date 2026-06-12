@@ -4,8 +4,45 @@ for a in "$@"; do
   [ "$a" != "--unshare-net" ] && args+=("$a")
 done
 
+# Detect worktree .git pointer files and inject the missing gitdir binds.
+# When a worktree is used, .git is a file containing "gitdir: <path>" pointing
+# into the main repo's .git/worktrees/<name>/ directory. Claude Code only binds
+# the pointer file itself, not the target — causing git to fail inside the sandbox.
+# The extra binds must be inserted before the "--" separator in the bwrap args.
+extra_binds=()
+i=0
+while [ $i -lt ${#args[@]} ]; do
+  if [ "${args[$i]}" = "--ro-bind" ] || [ "${args[$i]}" = "--bind" ]; then
+    src="${args[$((i+1))]}"
+    if [[ "$src" == *"/.git" ]] && [ -f "$src" ]; then
+      gitdir_line=$(grep '^gitdir:' "$src" 2>/dev/null)
+      if [ -n "$gitdir_line" ]; then
+        gitdir_path="${gitdir_line#gitdir: }"
+        gitdir_path="${gitdir_path%$'\r'}"
+        # .git/worktrees/<name> -> .git (main repo git dir)
+        main_git_dir="$(dirname "$(dirname "$gitdir_path")")"
+        extra_binds+=(--ro-bind "$gitdir_path" "$gitdir_path")
+        extra_binds+=(--ro-bind "$main_git_dir" "$main_git_dir")
+      fi
+    fi
+  fi
+  ((i++))
+done
+
+# Insert extra_binds before the "--" separator so bwrap treats them as bind options.
+if [ ${#extra_binds[@]} -gt 0 ]; then
+  final_args=()
+  for a in "${args[@]}"; do
+    if [ "$a" = "--" ]; then
+      final_args+=("${extra_binds[@]}")
+    fi
+    final_args+=("$a")
+  done
+  args=("${final_args[@]}")
+fi
+
 if [ -n "$BWRAP_WRAPPER_DEBUG" ]; then
-  LOG="${TMPDIR:-/tmp}/bwrap-wrapper.log"
+  LOG="/tmp/bwrap-wrapper.log"
   printf '[%s] exec: %s %s\n' "$(date -Iseconds)" "$REAL_BWRAP" "${args[*]}" >> "$LOG"
 fi
 
