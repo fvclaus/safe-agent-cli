@@ -14,12 +14,14 @@ export const gcpCliOptions = {
   gcp: optional(flag('--gcp')),
   googleCloud: optional(flag('--google-cloud')),
   project: optional(option('--project', string({ metavar: 'PROJECT_ID' }))),
+  serviceAccount: optional(option('--service-account', string({ metavar: 'SA_NAME' }))),
 };
 
 export interface GcpCliArgs {
   gcp: boolean | undefined;
   googleCloud: boolean | undefined;
   project: string | undefined;
+  serviceAccount: string | undefined;
 }
 
 export interface GcpSetupResult {
@@ -111,7 +113,8 @@ export async function setupGcpIntegration({
     }
   }
 
-  const sa = `claude-code@${projectId}.iam.gserviceaccount.com`;
+  const saName = args.serviceAccount ?? 'claude-code';
+  const sa = `${saName}@${projectId}.iam.gserviceaccount.com`;
 
   log(`\nChecking for service account ${chalk.bold(sa)}…`);
   try {
