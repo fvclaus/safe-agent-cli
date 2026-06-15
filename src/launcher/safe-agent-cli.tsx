@@ -114,9 +114,10 @@ function isSnap(binary: string): boolean {
   return realpath.status === 0 && realpath.stdout.trim() === '/usr/bin/snap';
 }
 
-function abortIfSnap(binary: string, installHint: string): void {
+export function abortIfSnap(binary: string, installHint: string): void {
   if (!isSnap(binary)) return;
   log(chalk.bold.red('ERROR:') + ` ${binary} is installed via snap, which is not supported.`);
+  log('Snap-installed tools do not work at all inside the Claude Code sandbox.');
   log('Snap launchers require a systemd user session to set up confinement.');
   log(`When ${binary} is spawned as a subprocess it cannot create the required`);
   log('transient scope, causing all commands to fail silently.');
@@ -154,6 +155,7 @@ export interface AgentAdapter {
 }
 
 export async function runSafeAgentCli(adapter: AgentAdapter): Promise<void> {
+  abortIfSnap('uv', 'https://docs.astral.sh/uv/getting-started/installation/');
   const args = await run(
     object({
       ...gcpCliOptions,
