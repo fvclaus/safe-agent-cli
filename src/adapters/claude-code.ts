@@ -43,14 +43,36 @@ function ensureClaudeSandboxEnabled(): void {
   }
 
   const sandbox = (settings['sandbox'] ?? {}) as Record<string, unknown>;
-  if (sandbox['enabled'] === true) return;
-
   sandbox['enabled'] = true;
   settings['sandbox'] = sandbox;
 
   mkdirSync(join(process.cwd(), '.claude'), { recursive: true });
   writeFileSync(settingsPath, JSON.stringify(settings, null, 2) + '\n', 'utf8');
   log(chalk.bold.green('OK:') + ` sandbox.enabled set to true in ${settingsPath}`);
+}
+
+function ensureProjectSettingsJson(): void {
+  const settingsPath = join(process.cwd(), '.claude', 'settings.json');
+  let settings: Record<string, unknown> = {};
+
+  if (existsSync(settingsPath)) {
+    try {
+      settings = JSON.parse(readFileSync(settingsPath, 'utf8')) as Record<string, unknown>;
+    } catch {
+      log(chalk.bold.yellow('WARNING:') + ` Could not parse ${settingsPath} — overwriting.`);
+    }
+  }
+
+  const sandbox = (settings['sandbox'] ?? {}) as Record<string, unknown>;
+  const filesystem = (sandbox['filesystem'] ?? {}) as Record<string, unknown>;
+  filesystem['allowWrite'] = ['.'];
+  filesystem['allowRead'] = ['.'];
+  sandbox['filesystem'] = filesystem;
+  settings['sandbox'] = sandbox;
+
+  mkdirSync(join(process.cwd(), '.claude'), { recursive: true });
+  writeFileSync(settingsPath, JSON.stringify(settings, null, 2) + '\n', 'utf8');
+  log(chalk.bold.green('OK:') + ` sandbox.filesystem set in ${settingsPath}`);
 }
 
 export const claudeCodeAdapter: AgentAdapter = {
@@ -62,6 +84,7 @@ export const claudeCodeAdapter: AgentAdapter = {
   prepareLaunch: () => {
     verifyClaudeSettingsJson();
     ensureClaudeSandboxEnabled();
+    ensureProjectSettingsJson();
   },
   buildLaunchArgs: (context) => [
     ...context.writableDirs.flatMap(d => ['--add-dir', d]),
