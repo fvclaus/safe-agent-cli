@@ -12,12 +12,14 @@ Wrapper CLIs for launching Claude Code or Codex with scoped GitHub and GCP crede
 ### Prerequisites
 
 - [Bun](https://bun.sh) — used for all package management and script execution
-- [gh](https://cli.github.com) — GitHub CLI (must be installed natively, **not** via snap)
-- `secret-tool` — for GitHub PAT storage (Linux only, see below)
 
-```bash
-sudo apt install libsecret-tools
-```
+The following are only required if you use the respective integration:
+
+- **GitHub** (`--gh`): [gh](https://cli.github.com) (must be installed natively, **not** via snap) and `secret-tool` for PAT storage (Linux only, see below)
+  ```bash
+  sudo apt install libsecret-tools
+  ```
+- **GCP** (`--gcp`): [Google Cloud CLI](https://cloud.google.com/sdk/docs/install) (must be installed natively, **not** via snap)
 
 ### Add to PATH
 
