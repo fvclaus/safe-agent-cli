@@ -12,19 +12,19 @@ MUST use **bun** for all package management and script execution. NEVER use npm,
 
 ## Architecture
 
-- [src/launcher/safe-agent-cli.tsx](/home/fredo/workspace/safe-claude-code/src/launcher/safe-agent-cli.tsx)
+- [src/launcher/safe-agent-cli.tsx](src/launcher/safe-agent-cli.tsx)
   Shared CLI parsing, prompting, integration composition, cleanup, and final process launch.
-- [src/integrations/github.ts](/home/fredo/workspace/safe-claude-code/src/integrations/github.ts)
+- [src/integrations/github.ts](src/integrations/github.ts)
   Owns GitHub CLI flags and GitHub credential setup.
-- [src/integrations/gcp.ts](/home/fredo/workspace/safe-claude-code/src/integrations/gcp.ts)
+- [src/integrations/gcp.ts](src/integrations/gcp.ts)
   Owns GCP CLI flags and GCP impersonation setup.
-- [src/adapters/claude-code.ts](/home/fredo/workspace/safe-claude-code/src/adapters/claude-code.ts)
+- [src/adapters/claude-code.ts](src/adapters/claude-code.ts)
   Owns Claude-specific behavior such as `.claude/settings*.json` handling, `bwrap` wiring, and Claude launch args.
-- [src/adapters/codex.ts](/home/fredo/workspace/safe-claude-code/src/adapters/codex.ts)
+- [src/adapters/codex.ts](src/adapters/codex.ts)
   Owns Codex-specific launch args and config mapping.
-- [src/commands/claude-code.tsx](/home/fredo/workspace/safe-claude-code/src/commands/claude-code.tsx), [src/commands/codex.tsx](/home/fredo/workspace/safe-claude-code/src/commands/codex.tsx)
+- [src/commands/claude-code.tsx](src/commands/claude-code.tsx), [src/commands/codex.tsx](src/commands/codex.tsx)
   Thin public entrypoints.
-- [bin/safe-claude-code](/home/fredo/workspace/safe-claude-code/bin/safe-claude-code), [bin/safe-codex](/home/fredo/workspace/safe-claude-code/bin/safe-codex)
+- [bin/safe-claude-code](bin/safe-claude-code), [bin/safe-codex](bin/safe-codex)
   Shell wrappers intended for PATH-based local installation.
 
 When refactoring, keep agent-specific logic out of the shared launcher whenever possible. Shared code should handle orchestration; adapters and integrations should own provider-specific behavior.
@@ -48,7 +48,7 @@ If you touch sandbox behavior, run the harness as well.
 
 ## Sandbox Harness
 
-The harness in [scripts/test-sandbox.ts](/home/fredo/workspace/safe-claude-code/scripts/test-sandbox.ts) mirrors the shared launcher setup (GCP/GitHub env setup plus `bwrap` sandboxing) but runs an arbitrary command instead of launching Claude or Codex.
+The harness in [scripts/test-sandbox.ts](scripts/test-sandbox.ts) mirrors the shared launcher setup (GCP/GitHub env setup plus `bwrap` sandboxing) but runs an arbitrary command instead of launching Claude or Codex.
 
 Examples:
 
@@ -64,4 +64,4 @@ Sandbox filesystem policy is read from `~/.claude/settings.json` and merged with
 
 ## CI
 
-TypeScript checking runs in GitHub Actions via [.github/workflows/tsc.yml](/home/fredo/workspace/safe-claude-code/.github/workflows/tsc.yml).
+TypeScript checking runs in GitHub Actions via [.github/workflows/tsc.yml](.github/workflows/tsc.yml).
