@@ -42,6 +42,7 @@ function ensureClaudeSandboxEnabled(): void {
     }
   }
 
+  settings['$schema'] = 'https://json.schemastore.org/claude-code-settings.json';
   const sandbox = (settings['sandbox'] ?? {}) as Record<string, unknown>;
   sandbox['enabled'] = true;
   settings['sandbox'] = sandbox;
@@ -63,6 +64,7 @@ function ensureProjectSettingsJson(): void {
     }
   }
 
+  settings['$schema'] = 'https://json.schemastore.org/claude-code-settings.json';
   const sandbox = (settings['sandbox'] ?? {}) as Record<string, unknown>;
   const filesystem = (sandbox['filesystem'] ?? {}) as Record<string, unknown>;
   filesystem['allowWrite'] = ['.'];
