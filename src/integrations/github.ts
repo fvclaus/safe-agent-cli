@@ -11,13 +11,24 @@ import { spawnSync } from 'node:child_process';
 
 $.verbose = false;
 
-function detectGithubOrg(): string | undefined {
+function detectGithubOwner(): string | undefined {
   const result = spawnSync('git', ['remote', 'get-url', 'origin'], { encoding: 'utf8' });
   if (result.status !== 0) return undefined;
   const url = result.stdout.trim();
   // Matches both https://github.com/ORG/repo and git@github.com:ORG/repo
   const match = url.match(/github\.com[/:]([\w.-]+)\//);
   return match?.[1];
+}
+
+async function detectGithubOrg(): Promise<string | undefined> {
+  const owner = detectGithubOwner();
+  if (!owner) return undefined;
+  try {
+    const resp = await fetch(`https://api.github.com/orgs/${owner}`);
+    return resp.ok ? owner : undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 export const githubCliOptions = {
@@ -81,7 +92,7 @@ export async function setupGithubIntegration({
     githubToken = out.stdout.trim();
     if (!githubToken) throw new Error('empty');
   } catch {
-    const githubOrg = detectGithubOrg();
+    const githubOrg = await detectGithubOrg();
     const requiredPermissions = ['issues (read & write)', 'contents (read & write)', 'pull_requests (read & write)', 'actions (read & write)', 'workflows (read & write)'];
     log(chalk.bold.red('ERROR:') + ` No GitHub PAT found for "${patName}".`);
     log('Create a fine-grained PAT:');
