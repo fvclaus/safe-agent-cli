@@ -12,6 +12,7 @@ import type { GcpCliArgs } from '../integrations/gcp.js';
 import { gcpCliOptions, setupGcpIntegration } from '../integrations/gcp.js';
 import type { GithubCliArgs } from '../integrations/github.js';
 import { githubCliOptions, setupGithubIntegration } from '../integrations/github.js';
+import { checkSensitiveEnv } from '../env-check.js';
 
 const log = (msg: string) => process.stderr.write(msg + '\n');
 
@@ -268,6 +269,7 @@ export async function runSafeAgentCli(adapter: AgentAdapter): Promise<void> {
   process.on('SIGTERM', () => { cleanup(); process.exit(143); });
 
   checkOriginHead();
+  await checkSensitiveEnv(credentialEnv, log);
   adapter.prepareLaunch?.(context);
 
   log(`Launching ${adapter.launchLabel}…\n`);
