@@ -11,6 +11,15 @@ import { spawnSync } from 'node:child_process';
 
 $.verbose = false;
 
+function detectGithubOrg(): string | undefined {
+  const result = spawnSync('git', ['remote', 'get-url', 'origin'], { encoding: 'utf8' });
+  if (result.status !== 0) return undefined;
+  const url = result.stdout.trim();
+  // Matches both https://github.com/ORG/repo and git@github.com:ORG/repo
+  const match = url.match(/github\.com[/:]([\w.-]+)\//);
+  return match?.[1];
+}
+
 export const githubCliOptions = {
   // flag() first so `--gh <agent-arg>` never swallows the next token;
   // an explicit PAT name therefore requires the `--gh=NAME` form.
@@ -72,9 +81,17 @@ export async function setupGithubIntegration({
     githubToken = out.stdout.trim();
     if (!githubToken) throw new Error('empty');
   } catch {
+    const githubOrg = detectGithubOrg();
+    const requiredPermissions = ['issues (read & write)', 'contents (read & write)', 'pull_requests (read & write)', 'actions (read & write)', 'workflows (read & write)'];
     log(chalk.bold.red('ERROR:') + ` No GitHub PAT found for "${patName}".`);
-    log('Create a fine-grained PAT (contents, pull_requests, actions, workflows — read & write):');
-    log(`  https://github.com/settings/personal-access-tokens/new?name=${encodeURIComponent(patName)}&expires_in=366&issues=write&contents=write&pull_requests=write&actions=write&workflows=write`);
+    log('Create a fine-grained PAT:');
+    if (githubOrg) {
+      log(`  https://github.com/settings/personal-access-tokens/new?name=${encodeURIComponent(patName)}&expires_in=365`);
+      log(`  Then set "Resource owner" to ${chalk.bold(githubOrg)} and grant read & write for:`);
+      for (const perm of requiredPermissions) log(`    - ${perm}`);
+    } else {
+      log(`  https://github.com/settings/personal-access-tokens/new?name=${encodeURIComponent(patName)}&expires_in=365&issues=write&contents=write&pull_requests=write&actions=write&workflows=write`);
+    }
     log('Then store it with:');
     log(`  secret-tool store --label="Github PAT ${patName}" github.pat ${patName}`);
     process.exit(1);
