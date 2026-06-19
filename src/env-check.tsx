@@ -1,11 +1,12 @@
 import chalk from 'chalk';
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
-import { homedir } from 'node:os';
 import { join } from 'node:path';
 import React, { useState } from 'react';
 import { Box, Text, render, useApp, useInput } from 'ink';
 
-const ALLOWLIST_PATH = join(homedir(), '.safe-agent-cli', 'allowed-env-vars.json');
+function allowlistPath(): string {
+  return join(process.cwd(), '.claude', 'allowed-env-vars.json');
+}
 
 // Well-known credential variable names
 const SENSITIVE_EXACT = new Set([
@@ -70,9 +71,9 @@ function isSensitive(name: string): boolean {
 }
 
 function loadAllowlist(): Set<string> {
-  if (!existsSync(ALLOWLIST_PATH)) return new Set();
+  if (!existsSync(allowlistPath())) return new Set();
   try {
-    const parsed: unknown = JSON.parse(readFileSync(ALLOWLIST_PATH, 'utf8'));
+    const parsed: unknown = JSON.parse(readFileSync(allowlistPath(), 'utf8'));
     if (Array.isArray(parsed)) return new Set(parsed as string[]);
   } catch {
     // corrupted file — treat as empty
@@ -83,9 +84,9 @@ function loadAllowlist(): Set<string> {
 function saveToAllowlist(vars: string[]): void {
   const existing = loadAllowlist();
   for (const v of vars) existing.add(v);
-  mkdirSync(join(homedir(), '.safe-agent-cli'), { recursive: true });
+  mkdirSync(join(process.cwd(), '.claude'), { recursive: true });
   writeFileSync(
-    ALLOWLIST_PATH,
+    allowlistPath(),
     JSON.stringify([...existing].sort(), null, 2) + '\n',
     'utf8',
   );
@@ -174,7 +175,7 @@ const SensitiveEnvPrompt: React.FC<SensitiveEnvPromptProps> = ({ vars, onDone })
         ))}
       </Box>
       <Text dimColor>↑↓ navigate · Space toggle · Enter confirm · Esc back</Text>
-      <Text dimColor>Saved to {ALLOWLIST_PATH}</Text>
+      <Text dimColor>Saved to {allowlistPath()}</Text>
     </Box>
   );
 };
@@ -189,7 +190,7 @@ export async function checkSensitiveEnv(
   if (!process.stdin.isTTY) {
     log(chalk.bold.yellow('WARNING:') + ' Sensitive environment variables will be passed to the agent:');
     for (const v of sensitive) log(`  • ${v}`);
-    log('Running in non-interactive mode — proceeding. To suppress this warning, add variables to ' + ALLOWLIST_PATH);
+    log('Running in non-interactive mode — proceeding. To suppress this warning, add variables to ' + allowlistPath());
     return;
   }
 
@@ -213,7 +214,7 @@ export async function checkSensitiveEnv(
     saveToAllowlist(state.whitelisted);
     log(
       chalk.bold.green('OK:') +
-      ` Whitelisted ${state.whitelisted.length} variable(s) in ${ALLOWLIST_PATH}`,
+      ` Whitelisted ${state.whitelisted.length} variable(s) in ${allowlistPath()}`,
     );
   }
 }
