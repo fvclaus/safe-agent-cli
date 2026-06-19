@@ -114,6 +114,47 @@ function isSnap(binary: string): boolean {
   return realpath.status === 0 && realpath.stdout.trim() === '/usr/bin/snap';
 }
 
+function checkOriginHead(): void {
+  const gitCheck = spawnSync('git', ['rev-parse', '--git-dir'], { encoding: 'utf8' });
+  if (gitCheck.status !== 0) return;
+
+  const lsRemote = spawnSync('git', ['ls-remote', '--symref', 'origin', 'HEAD'], {
+    encoding: 'utf8',
+    timeout: 5000,
+  });
+
+  if (lsRemote.status !== 0 || lsRemote.error) {
+    const localHead = spawnSync('git', ['symbolic-ref', 'refs/remotes/origin/HEAD'], { encoding: 'utf8' });
+    if (localHead.status !== 0) {
+      log(chalk.bold.yellow('WARNING:') + ' origin/HEAD is not set and the remote is unreachable.');
+      log('Worktrees created by agents may use the wrong base branch.');
+      log('Fix with: git remote set-head origin --auto');
+    }
+    return;
+  }
+
+  const match = lsRemote.stdout.match(/^ref:\s+refs\/heads\/(\S+)\s+HEAD/m);
+  if (!match) return;
+  const remoteDefault = match[1];
+  const expectedLocalRef = `refs/remotes/origin/${remoteDefault}`;
+
+  const localHead = spawnSync('git', ['symbolic-ref', 'refs/remotes/origin/HEAD'], { encoding: 'utf8' });
+
+  if (localHead.status !== 0) {
+    log(chalk.bold.yellow('WARNING:') + ` origin/HEAD is not set. The remote's default branch is "${remoteDefault}".`);
+    log('Worktrees created by agents will use the wrong base branch.');
+    log('Fix with: git remote set-head origin --auto');
+    return;
+  }
+
+  const resolvedRef = localHead.stdout.trim();
+  if (resolvedRef !== expectedLocalRef) {
+    log(chalk.bold.yellow('WARNING:') + ` origin/HEAD → "${resolvedRef}" but the remote's default branch is "${remoteDefault}".`);
+    log('Worktrees created by agents will use the wrong base branch.');
+    log('Fix with: git remote set-head origin --auto');
+  }
+}
+
 export function abortIfSnap(binary: string, installHint: string): void {
   if (!isSnap(binary)) return;
   log(chalk.bold.red('ERROR:') + ` ${binary} is installed via snap, which is not supported.`);
@@ -226,6 +267,7 @@ export async function runSafeAgentCli(adapter: AgentAdapter): Promise<void> {
   process.on('SIGINT',  () => { cleanup(); process.exit(130); });
   process.on('SIGTERM', () => { cleanup(); process.exit(143); });
 
+  checkOriginHead();
   adapter.prepareLaunch?.(context);
 
   log(`Launching ${adapter.launchLabel}…\n`);
