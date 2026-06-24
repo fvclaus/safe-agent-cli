@@ -113,6 +113,12 @@ export async function setupGithubIntegration({
     const resp = await fetch('https://api.github.com/user', {
       headers: { Authorization: `token ${githubToken}` },
     });
+    if (!resp.ok) {
+      log(chalk.bold.red('ERROR:') + ` GITHUB_TOKEN was rejected by GitHub (HTTP ${resp.status} ${resp.statusText}).`);
+      log('  The token is invalid, expired, or revoked. Create a new one and store it with:');
+      log(`  secret-tool store --label="Github PAT ${patName}" github.pat ${patName}`);
+      process.exit(1);
+    }
     const scopes = resp.headers.get('x-oauth-scopes');
     const expiry = resp.headers.get('github-authentication-token-expiration');
     if (scopes !== null) {
@@ -127,9 +133,6 @@ export async function setupGithubIntegration({
 
       log(chalk.bold.green('OK:') + ' GITHUB_TOKEN is a fine-grained PAT.');
       if (expiry) log(`  Expires:     ${expiry}`);
-      log('  Permissions: contents (read & write), pull_requests (read & write),');
-      log('               actions (read & write), workflows (read & write)');
-      log('               (these are the minimum required; additional permissions may have been granted)');
     }
   } catch {
     log(chalk.bold.yellow('WARNING:') + ' Could not determine GitHub token info.');
