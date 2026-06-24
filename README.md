@@ -80,6 +80,15 @@ You MUST not push empty commits to trigger pipeline. Change them to `workflow_di
 - Claude-specific launch behavior through a Claude adapter
 - Best-effort Codex launch behavior through a Codex adapter
 
+## Networking & the bwrap shim
+
+Claude Code sandboxes every Bash command with `bwrap` (bubblewrap). This repo
+ships a shim at [`src/bin/bwrap`](src/bin/bwrap), placed on `PATH` by the Claude
+adapter, that strips `--unshare-net` so the sandbox shares your **host network
+namespace** — letting processes the agent starts (a dev server, database, etc.)
+bind on the same `localhost` you reach from your machine. (It also injects the
+git-dir binds Claude Code omits for worktrees.)
+
 ## Architecture
 
 - `src/launcher/safe-agent-cli.tsx` — Shared CLI parsing, prompting, integration composition, cleanup, and final process launch.

@@ -1,7 +1,22 @@
 #!/bin/bash
+# Strip --unshare-net so the sandbox shares the host network namespace, making
+# processes the agent starts (e.g. a dev server) reachable from the host.
+#
+# Also fix Claude Code's network-proxy cleanup trap, which under zsh discards the
+# command's real exit code. Claude wraps each command with:
+#     trap "kill %1 %2 2>/dev/null; exit" EXIT
+# Under zsh a bare `exit` in a trap takes the status of the trap's last command
+# (the `kill`), so you get 0 when the socat relays are alive and 2 once they die.
+# Rewrite it to capture $? first. The 5-backslash form is what bash's ${//}
+# replacement must emit so the arg ends up with \\\$, which survives the nested
+# zsh -c "..." quoting and makes $?/$rc expand at trap-fire time in the sandbox.
+__t_old='kill %1 %2 2>/dev/null; exit'
+__t_new='rc=\\\\\$?; kill %1 %2 2>/dev/null; exit \\\\\$rc'
 args=()
 for a in "$@"; do
-  [ "$a" != "--unshare-net" ] && args+=("$a")
+  [ "$a" = "--unshare-net" ] && continue
+  a="${a//$__t_old/$__t_new}"
+  args+=("$a")
 done
 
 # Detect worktree .git pointer files and inject the missing gitdir binds.

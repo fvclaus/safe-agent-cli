@@ -98,6 +98,8 @@ export const claudeCodeAdapter: AgentAdapter = {
       : []),
     ...context.args.rest,
   ],
+  // Put our bwrap shim (src/bin/bwrap) on PATH so it intercepts Claude Code's
+  // sandbox calls; REAL_BWRAP points it at the genuine bwrap.
   buildSpawnEnv: () => {
     const realBwrap = spawnSync('which', ['bwrap'], { encoding: 'utf8' }).stdout.trim() || '/usr/bin/bwrap';
     const srcDir = fileURLToPath(new URL('../', import.meta.url));
