@@ -12,3 +12,5 @@ dist/
 .ripgreprc
 .zprofile
 .zshrc
+.DS_store
+settings.local.json

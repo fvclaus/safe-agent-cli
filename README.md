@@ -15,10 +15,12 @@ Wrapper CLIs for launching Claude Code or Codex with scoped GitHub and GCP crede
 
 The following are only required if you use the respective integration:
 
-- **GitHub** (`--gh`): [gh](https://cli.github.com) (must be installed natively, **not** via snap) and `secret-tool` for PAT storage (Linux only, see below)
-  ```bash
-  sudo apt install libsecret-tools
-  ```
+- **GitHub** (`--gh`): [gh](https://cli.github.com) (must be installed natively, **not** via snap) and a keychain tool for PAT storage:
+  - **Linux**: `secret-tool` (part of GNOME Keyring / libsecret)
+    ```bash
+    sudo apt install libsecret-tools
+    ```
+  - **macOS**: `security` (built-in Keychain CLI, no installation required)
 - **GCP** (`--gcp`): [Google Cloud CLI](https://cloud.google.com/sdk/docs/install) (must be installed natively, **not** via snap)
 
 ### Add to PATH
@@ -31,9 +33,21 @@ export PATH="/path/to/safe-agent-cli/bin:$PATH"
 
 Add this line to your `~/.bashrc` or `~/.zshrc` to make it permanent.
 
-### Linux-only limitation
+### Storing your GitHub PAT
 
-GitHub PAT lookup relies on `secret-tool` (part of GNOME Keyring / libsecret), which is **Linux-only**. The `--gh` / `--github` flags will not work on macOS or Windows.
+The `--gh` flag looks up your PAT by name from the system keychain. Store it once, then use `--gh` or `--gh=<name>` to inject it.
+
+**macOS** (Keychain):
+```bash
+security add-generic-password -s github.pat -a safe-agent-cli -w
+```
+
+**Linux** (GNOME Keyring / libsecret):
+```bash
+secret-tool store --label="Github PAT safe-agent-cli" github.pat safe-agent-cli
+```
+
+The PAT name defaults to the current directory name. Use `--gh=<name>` to specify a different one.
 
 ### Configure ~/.claude/CLAUDE.md
 

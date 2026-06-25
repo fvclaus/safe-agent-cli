@@ -55,12 +55,22 @@ export async function setupGithubIntegration({
 
   abortIfSnap('gh', 'https://cli.github.com');
 
-  const secretToolAvailable = spawnSync('which', ['secret-tool'], { encoding: 'utf8' }).status === 0;
-  if (!secretToolAvailable) {
-    log(chalk.bold.red('ERROR:') + ' secret-tool is not installed.');
-    log('Install it with:');
-    log('  sudo apt install libsecret-tools');
-    process.exit(1);
+  const isMacOS = process.platform === 'darwin';
+
+  if (isMacOS) {
+    const securityAvailable = spawnSync('which', ['security'], { encoding: 'utf8' }).status === 0;
+    if (!securityAvailable) {
+      log(chalk.bold.red('ERROR:') + ' security command not found (expected at /usr/bin/security).');
+      process.exit(1);
+    }
+  } else {
+    const secretToolAvailable = spawnSync('which', ['secret-tool'], { encoding: 'utf8' }).status === 0;
+    if (!secretToolAvailable) {
+      log(chalk.bold.red('ERROR:') + ' secret-tool is not installed.');
+      log('Install it with:');
+      log('  sudo apt install libsecret-tools');
+      process.exit(1);
+    }
   }
 
   const patName = typeof ghArg === 'string' ? ghArg : basename(process.cwd());
@@ -68,15 +78,26 @@ export async function setupGithubIntegration({
 
   let githubToken: string;
   try {
-    const out = await $`secret-tool lookup github.pat ${patName}`;
-    githubToken = out.stdout.trim();
-    if (!githubToken) throw new Error('empty');
+    if (isMacOS) {
+      const out = spawnSync('security', ['find-generic-password', '-s', 'github.pat', '-a', patName, '-w'], { encoding: 'utf8' });
+      if (out.status !== 0) throw new Error('not found');
+      githubToken = out.stdout.trim();
+      if (!githubToken) throw new Error('empty');
+    } else {
+      const out = await $`secret-tool lookup github.pat ${patName}`;
+      githubToken = out.stdout.trim();
+      if (!githubToken) throw new Error('empty');
+    }
   } catch {
     log(chalk.bold.red('ERROR:') + ` No GitHub PAT found for "${patName}".`);
     log('Create a fine-grained PAT (contents, pull_requests, actions, workflows — read & write):');
     log(`  https://github.com/settings/personal-access-tokens/new?name=${encodeURIComponent(patName)}&expires_in=366&issues=write&contents=write&pull_requests=write&actions=write&workflows=write`);
     log('Then store it with:');
-    log(`  secret-tool store --label="Github PAT ${patName}" github.pat ${patName}`);
+    if (isMacOS) {
+      log(`  security add-generic-password -s github.pat -a ${patName} -w`);
+    } else {
+      log(`  secret-tool store --label="Github PAT ${patName}" github.pat ${patName}`);
+    }
     process.exit(1);
   }
 
