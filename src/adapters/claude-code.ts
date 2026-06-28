@@ -5,6 +5,7 @@ import { homedir } from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { spawnSync } from 'node:child_process';
 import type { AgentAdapter } from '../launcher/safe-agent-cli.js';
+import { mergeReadPaths, safeChainReadPaths } from '../safe-chain.js';
 
 const log = (msg: string) => process.stderr.write(msg + '\n');
 
@@ -77,6 +78,49 @@ function ensureProjectSettingsJson(): void {
   log(chalk.bold.green('OK:') + ` sandbox.filesystem set in ${settingsPath}`);
 }
 
+// safe-chain's install dirs are absolute and user-specific (e.g.
+// ~/.safe-chain, ~/.nvm/versions/node/<v>), so they belong in the user's global
+// settings — not the committed project settings.json. Merge them into
+// ~/.claude/settings.json so the sandbox can resolve the `safe-chain` binary and
+// stop printing "safe-chain is not available to protect you from installing
+// malware" on every npm/pip/python3 call. Idempotent: only writes when a path is
+// genuinely missing, and never clobbers unrelated settings.
+function ensureUserSafeChainReadAccess(): void {
+  const safeChainPaths = safeChainReadPaths();
+  if (safeChainPaths.length === 0) return;
+
+  const home = homedir();
+  const settingsPath = join(home, '.claude', 'settings.json');
+  if (!existsSync(settingsPath)) {
+    log(chalk.bold.yellow('WARNING:') + ` ${settingsPath} not found — skipping safe-chain sandbox read-access setup.`);
+    return;
+  }
+
+  let settings: Record<string, unknown>;
+  try {
+    settings = JSON.parse(readFileSync(settingsPath, 'utf8')) as Record<string, unknown>;
+  } catch {
+    log(chalk.bold.yellow('WARNING:') + ` Could not parse ${settingsPath} — skipping safe-chain sandbox read-access setup.`);
+    return;
+  }
+
+  const sandbox = (settings['sandbox'] ?? {}) as Record<string, unknown>;
+  const filesystem = (sandbox['filesystem'] ?? {}) as Record<string, unknown>;
+  const allowRead = Array.isArray(filesystem['allowRead'])
+    ? (filesystem['allowRead'] as string[])
+    : [];
+
+  const merged = mergeReadPaths(allowRead, safeChainPaths, home);
+  if (merged === null) return; // already covered — nothing to do
+
+  filesystem['allowRead'] = merged;
+  sandbox['filesystem'] = filesystem;
+  settings['sandbox'] = sandbox;
+  writeFileSync(settingsPath, JSON.stringify(settings, null, 2) + '\n', 'utf8');
+  const added = merged.slice(allowRead.length);
+  log(chalk.bold.green('OK:') + ` granted sandbox read access to safe-chain in ${settingsPath}: ${added.join(', ')}`);
+}
+
 export const claudeCodeAdapter: AgentAdapter = {
   programName: 'safe-claude-code',
   brief: 'Launch Claude Code with GCP service-account impersonation.',
@@ -87,6 +131,7 @@ export const claudeCodeAdapter: AgentAdapter = {
     verifyClaudeSettingsJson();
     ensureClaudeSandboxEnabled();
     ensureProjectSettingsJson();
+    ensureUserSafeChainReadAccess();
   },
   buildLaunchArgs: (context) => [
     ...context.writableDirs.flatMap(d => ['--add-dir', d]),
