@@ -31,6 +31,26 @@ function verifyClaudeSettingsJson(): void {
   if (hasError) process.exit(1);
 }
 
+// Claude Code's sandbox masks these .claude/ subdirectories (they're on its
+// denyWithinAllow list). When a path doesn't exist on disk, bwrap has to
+// fabricate a throwaway mountpoint through the read-write bind of the project
+// root — which surfaces to any concurrent process as a real 0-byte stub file
+// (and, observed with a long-running background process, a spurious nested
+// .claude/.claude/ tree). Pre-creating each as a real directory with a tracked
+// .gitkeep gives bwrap an existing mountpoint to bind over, so it never writes
+// stubs into the working tree. Idempotent.
+const CLAUDE_MASKED_DIRS = ['agents', 'commands', 'hooks', 'routines', 'skills', 'workflows'];
+
+function ensureClaudeStubDirs(): void {
+  for (const name of CLAUDE_MASKED_DIRS) {
+    const dir = join(process.cwd(), '.claude', name);
+    mkdirSync(dir, { recursive: true });
+    const gitkeep = join(dir, '.gitkeep');
+    if (!existsSync(gitkeep)) writeFileSync(gitkeep, '', 'utf8');
+  }
+  log(chalk.bold.green('OK:') + ` ensured .claude/{${CLAUDE_MASKED_DIRS.join(',')}}/ exist with .gitkeep`);
+}
+
 function ensureClaudeSandboxEnabled(): void {
   const settingsPath = join(process.cwd(), '.claude', 'settings.local.json');
   let settings: Record<string, unknown> = {};
@@ -129,6 +149,7 @@ export const claudeCodeAdapter: AgentAdapter = {
   launchLabel: 'Claude Code',
   prepareLaunch: () => {
     verifyClaudeSettingsJson();
+    ensureClaudeStubDirs();
     ensureClaudeSandboxEnabled();
     ensureProjectSettingsJson();
     ensureUserSafeChainReadAccess();
