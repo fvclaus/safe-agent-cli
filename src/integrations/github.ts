@@ -31,6 +31,17 @@ async function detectGithubOrg(): Promise<string | undefined> {
   }
 }
 
+// Shell command the user should run to store — or replace — their PAT in the
+// platform keychain. macOS `security add-generic-password` needs -U to
+// overwrite an existing entry; without it, re-storing a rotated/expired token
+// fails with "already exists". `secret-tool store` overwrites by default.
+// patName is quoted so names containing spaces stay a single argument.
+function storePatHint(patName: string): string {
+  return process.platform === 'darwin'
+    ? `security add-generic-password -U -s github.pat -a "${patName}" -w`
+    : `secret-tool store --label="Github PAT ${patName}" github.pat "${patName}"`;
+}
+
 export const githubCliOptions = {
   // flag() first so `--gh <agent-arg>` never swallows the next token;
   // an explicit PAT name therefore requires the `--gh=NAME` form.
@@ -75,12 +86,22 @@ export async function setupGithubIntegration({
 
   abortIfSnap('gh', 'https://cli.github.com');
 
-  const secretToolAvailable = spawnSync('which', ['secret-tool'], { encoding: 'utf8' }).status === 0;
-  if (!secretToolAvailable) {
-    log(chalk.bold.red('ERROR:') + ' secret-tool is not installed.');
-    log('Install it with:');
-    log('  sudo apt install libsecret-tools');
-    process.exit(1);
+  const isMacOS = process.platform === 'darwin';
+
+  if (isMacOS) {
+    const securityAvailable = spawnSync('which', ['security'], { encoding: 'utf8' }).status === 0;
+    if (!securityAvailable) {
+      log(chalk.bold.red('ERROR:') + ' security command not found (expected at /usr/bin/security).');
+      process.exit(1);
+    }
+  } else {
+    const secretToolAvailable = spawnSync('which', ['secret-tool'], { encoding: 'utf8' }).status === 0;
+    if (!secretToolAvailable) {
+      log(chalk.bold.red('ERROR:') + ' secret-tool is not installed.');
+      log('Install it with:');
+      log('  sudo apt install libsecret-tools');
+      process.exit(1);
+    }
   }
 
   const patName = typeof ghArg === 'string' ? ghArg : basename(process.cwd());
@@ -88,9 +109,16 @@ export async function setupGithubIntegration({
 
   let githubToken: string;
   try {
-    const out = await $`secret-tool lookup github.pat ${patName}`;
-    githubToken = out.stdout.trim();
-    if (!githubToken) throw new Error('empty');
+    if (isMacOS) {
+      const out = spawnSync('security', ['find-generic-password', '-s', 'github.pat', '-a', patName, '-w'], { encoding: 'utf8' });
+      if (out.status !== 0) throw new Error('not found');
+      githubToken = out.stdout.trim();
+      if (!githubToken) throw new Error('empty');
+    } else {
+      const out = await $`secret-tool lookup github.pat ${patName}`;
+      githubToken = out.stdout.trim();
+      if (!githubToken) throw new Error('empty');
+    }
   } catch {
     const githubOrg = await detectGithubOrg();
     const requiredPermissions = ['issues (read & write)', 'contents (read & write)', 'pull_requests (read & write)', 'actions (read & write)', 'workflows (read & write)'];
@@ -104,7 +132,7 @@ export async function setupGithubIntegration({
       log(`  https://github.com/settings/personal-access-tokens/new?name=${encodeURIComponent(patName)}&expires_in=365&issues=write&contents=write&pull_requests=write&actions=write&workflows=write`);
     }
     log('Then store it with:');
-    log(`  secret-tool store --label="Github PAT ${patName}" github.pat ${patName}`);
+    log(`  ${storePatHint(patName)}`);
     process.exit(1);
   }
 
@@ -116,7 +144,7 @@ export async function setupGithubIntegration({
     if (!resp.ok) {
       log(chalk.bold.red('ERROR:') + ` GITHUB_TOKEN was rejected by GitHub (HTTP ${resp.status} ${resp.statusText}).`);
       log('  The token is invalid, expired, or revoked. Create a new one and store it with:');
-      log(`  secret-tool store --label="Github PAT ${patName}" github.pat ${patName}`);
+      log(`  ${storePatHint(patName)}`);
       process.exit(1);
     }
     const scopes = resp.headers.get('x-oauth-scopes');

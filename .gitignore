@@ -12,6 +12,8 @@ dist/
 .ripgreprc
 .zprofile
 .zshrc
+.DS_Store
+settings.local.json
 
 # Same, under .claude/. The masked *directories* (agents, commands, hooks,
 # routines, skills, workflows) are pre-created with a tracked .gitkeep by
