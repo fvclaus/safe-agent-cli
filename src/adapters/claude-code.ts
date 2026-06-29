@@ -51,6 +51,54 @@ function ensureClaudeStubDirs(): void {
   log(chalk.bold.green('OK:') + ` ensured .claude/{${CLAUDE_MASKED_DIRS.join(',')}}/ exist with .gitkeep`);
 }
 
+// The sandbox leaves bind-mount stubs in the working tree on every launch (see
+// ensureClaudeStubDirs for the .claude/ directory case). The file stubs below
+// can't be pre-created as directories, so we keep them out of version control.
+// Each launch ensures .gitignore carries these patterns; only genuinely missing
+// lines are appended, under their group comment, so it's idempotent and never
+// clobbers a user's existing entries.
+const GITIGNORE_STUB_GROUPS = [
+  {
+    comment: '# Claude Code sandbox bind-mount stubs (created automatically on each launch)',
+    patterns: [
+      '.bash_profile', '.bashrc', '.gitconfig', '.gitmodules', '.idea',
+      '.mcp.json', '.profile', '.ripgreprc', '.zprofile', '.zshrc',
+    ],
+  },
+  {
+    comment: [
+      '# Same, under .claude/. The masked *directories* (agents, commands, hooks,',
+      '# routines, skills, workflows) are pre-created with a tracked .gitkeep by',
+      '# safe-claude-code so bwrap binds over them instead of leaking stubs — see',
+      '# ensureClaudeStubDirs() in src/adapters/claude-code.ts. These two are files,',
+      "# not directories, so they can't be .gitkeep'd; ignore their launch-time stubs.",
+    ].join('\n'),
+    patterns: ['.claude/launch.json', '.claude/scheduled_tasks.json'],
+  },
+];
+
+function ensureGitignoreStubs(): void {
+  const gitignorePath = join(process.cwd(), '.gitignore');
+  const existing = existsSync(gitignorePath) ? readFileSync(gitignorePath, 'utf8') : '';
+  const present = new Set(
+    existing.split('\n').map(l => l.trim()).filter(l => l.length > 0 && !l.startsWith('#')),
+  );
+
+  const blocks: string[] = [];
+  let added = 0;
+  for (const group of GITIGNORE_STUB_GROUPS) {
+    const missing = group.patterns.filter(p => !present.has(p));
+    if (missing.length === 0) continue;
+    blocks.push(`${group.comment}\n${missing.join('\n')}`);
+    added += missing.length;
+  }
+  if (blocks.length === 0) return;
+
+  const sep = existing.length === 0 ? '' : existing.endsWith('\n') ? '\n' : '\n\n';
+  writeFileSync(gitignorePath, existing + sep + blocks.join('\n\n') + '\n', 'utf8');
+  log(chalk.bold.green('OK:') + ` added ${added} sandbox-stub pattern(s) to ${gitignorePath}`);
+}
+
 function ensureClaudeSandboxEnabled(): void {
   const settingsPath = join(process.cwd(), '.claude', 'settings.local.json');
   let settings: Record<string, unknown> = {};
@@ -150,6 +198,7 @@ export const claudeCodeAdapter: AgentAdapter = {
   prepareLaunch: () => {
     verifyClaudeSettingsJson();
     ensureClaudeStubDirs();
+    ensureGitignoreStubs();
     ensureClaudeSandboxEnabled();
     ensureProjectSettingsJson();
     ensureUserSafeChainReadAccess();
