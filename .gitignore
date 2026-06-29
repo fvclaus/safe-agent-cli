@@ -12,7 +12,7 @@ dist/
 .ripgreprc
 .zprofile
 .zshrc
-.DS_store
+.DS_Store
 settings.local.json
 
 # Same, under .claude/. The masked *directories* (agents, commands, hooks,

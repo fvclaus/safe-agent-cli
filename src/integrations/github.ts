@@ -31,6 +31,17 @@ async function detectGithubOrg(): Promise<string | undefined> {
   }
 }
 
+// Shell command the user should run to store — or replace — their PAT in the
+// platform keychain. macOS `security add-generic-password` needs -U to
+// overwrite an existing entry; without it, re-storing a rotated/expired token
+// fails with "already exists". `secret-tool store` overwrites by default.
+// patName is quoted so names containing spaces stay a single argument.
+function storePatHint(patName: string): string {
+  return process.platform === 'darwin'
+    ? `security add-generic-password -U -s github.pat -a "${patName}" -w`
+    : `secret-tool store --label="Github PAT ${patName}" github.pat "${patName}"`;
+}
+
 export const githubCliOptions = {
   // flag() first so `--gh <agent-arg>` never swallows the next token;
   // an explicit PAT name therefore requires the `--gh=NAME` form.
@@ -121,11 +132,7 @@ export async function setupGithubIntegration({
       log(`  https://github.com/settings/personal-access-tokens/new?name=${encodeURIComponent(patName)}&expires_in=365&issues=write&contents=write&pull_requests=write&actions=write&workflows=write`);
     }
     log('Then store it with:');
-    if (isMacOS) {
-      log(`  security add-generic-password -s github.pat -a ${patName} -w`);
-    } else {
-      log(`  secret-tool store --label="Github PAT ${patName}" github.pat ${patName}`);
-    }
+    log(`  ${storePatHint(patName)}`);
     process.exit(1);
   }
 
@@ -137,11 +144,7 @@ export async function setupGithubIntegration({
     if (!resp.ok) {
       log(chalk.bold.red('ERROR:') + ` GITHUB_TOKEN was rejected by GitHub (HTTP ${resp.status} ${resp.statusText}).`);
       log('  The token is invalid, expired, or revoked. Create a new one and store it with:');
-      if (isMacOS) {
-        log(`  security add-generic-password -s github.pat -a ${patName} -w`);
-      } else {
-        log(`  secret-tool store --label="Github PAT ${patName}" github.pat ${patName}`);
-      }
+      log(`  ${storePatHint(patName)}`);
       process.exit(1);
     }
     const scopes = resp.headers.get('x-oauth-scopes');

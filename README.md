@@ -39,8 +39,9 @@ The `--gh` flag looks up your PAT by name from the system keychain. Store it onc
 
 **macOS** (Keychain):
 ```bash
-security add-generic-password -s github.pat -a safe-agent-cli -w
+security add-generic-password -U -s github.pat -a safe-agent-cli -w
 ```
+(`-U` updates the entry if it already exists, so the same command works when you rotate the token.)
 
 **Linux** (GNOME Keyring / libsecret):
 ```bash
