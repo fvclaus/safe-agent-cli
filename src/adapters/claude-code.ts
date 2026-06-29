@@ -111,10 +111,15 @@ function ensureClaudeSandboxEnabled(): void {
     }
   }
 
+  const before = JSON.stringify(settings);
   settings['$schema'] = 'https://json.schemastore.org/claude-code-settings.json';
   const sandbox = (settings['sandbox'] ?? {}) as Record<string, unknown>;
   sandbox['enabled'] = true;
   settings['sandbox'] = sandbox;
+
+  // Don't rewrite (and reformat) the file when the desired values are already
+  // present — some projects require their settings formatted a specific way.
+  if (JSON.stringify(settings) === before) return;
 
   mkdirSync(join(process.cwd(), '.claude'), { recursive: true });
   writeFileSync(settingsPath, JSON.stringify(settings, null, 2) + '\n', 'utf8');
@@ -133,6 +138,7 @@ function ensureProjectSettingsJson(): void {
     }
   }
 
+  const before = JSON.stringify(settings);
   settings['$schema'] = 'https://json.schemastore.org/claude-code-settings.json';
   const sandbox = (settings['sandbox'] ?? {}) as Record<string, unknown>;
   const filesystem = (sandbox['filesystem'] ?? {}) as Record<string, unknown>;
@@ -140,6 +146,10 @@ function ensureProjectSettingsJson(): void {
   filesystem['allowRead'] = ['.'];
   sandbox['filesystem'] = filesystem;
   settings['sandbox'] = sandbox;
+
+  // Don't rewrite (and reformat) the file when the desired values are already
+  // present — some projects require their settings formatted a specific way.
+  if (JSON.stringify(settings) === before) return;
 
   mkdirSync(join(process.cwd(), '.claude'), { recursive: true });
   writeFileSync(settingsPath, JSON.stringify(settings, null, 2) + '\n', 'utf8');
