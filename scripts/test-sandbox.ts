@@ -11,18 +11,16 @@
  *   bun scripts/test-sandbox.ts --gh=my-token "gh auth status"   # explicit PAT name
  *
  * Sandbox filesystem policy is read from (merged, in order):
- *   1. ~/.claude/settings.json  — long form: sandbox.filesystem.{read,write}.*
- *   2. .claude/settings.json    — short form: sandbox.filesystem.{allowWrite,allowRead}
+ *   1. ~/.claude/settings.json   (user)
+ *   2. .claude/settings.json     (project)
+ *   3. .claude/settings.local.json (local)
  *
- * Long form keys:
- *   read.denyOnly        → dirs mounted as tmpfs
- *   read.allowWithinDeny → paths re-bound ro after tmpfs
- *   write.allowOnly      → paths bound rw
- *   write.denyWithinAllow→ paths re-denied within write-allow (+ mandatory denies)
- *
- * Short form (project settings):
- *   allowWrite → same as write.allowOnly
- *   allowRead  → same as read.allowWithinDeny
+ * Only the sandbox.filesystem keys defined by claude-code-settings.json are
+ * honored (https://json.schemastore.org/claude-code-settings.json):
+ *   allowWrite → paths bound rw
+ *   denyWrite  → paths re-denied write within allowWrite (+ mandatory denies)
+ *   denyRead   → dirs mounted as tmpfs (read denied)
+ *   allowRead  → paths re-bound ro within denyRead regions
  */
 
 import chalk from 'chalk';
@@ -92,47 +90,38 @@ function expandPath(p: string): string {
 }
 
 interface SandboxFsConfig {
-  readDenyOnly:       string[];
-  readAllowWithinDeny: string[];
-  writeAllowOnly:     string[];
-  writeDenyWithinAllow: string[];
+  allowWrite: string[];
+  denyWrite:  string[];
+  denyRead:   string[];
+  allowRead:  string[];
 }
 
 function loadSandboxConfig(): SandboxFsConfig {
   const cfg: SandboxFsConfig = {
-    readDenyOnly: [], readAllowWithinDeny: [],
-    writeAllowOnly: [], writeDenyWithinAllow: [],
+    allowWrite: [], denyWrite: [], denyRead: [], allowRead: [],
   };
 
-  function mergeFile(raw: Record<string, unknown> | null, isShortForm: boolean) {
+  function mergeFile(raw: Record<string, unknown> | null) {
     if (!raw) return;
     const fs = (raw?.['sandbox'] as Record<string, unknown> | undefined)
                ?.['filesystem'] as Record<string, unknown> | undefined;
     if (!fs) return;
 
-    if (isShortForm) {
-      // allowWrite / allowRead
-      const aw = fs['allowWrite'] as string[] | undefined;
-      const ar = fs['allowRead']  as string[] | undefined;
-      if (aw) cfg.writeAllowOnly.push(...aw.map(expandPath));
-      if (ar) cfg.readAllowWithinDeny.push(...ar.map(expandPath));
-    }
-
-    // Long form (may appear in either file)
-    const read  = fs['read']  as Record<string, string[]> | undefined;
-    const write = fs['write'] as Record<string, string[]> | undefined;
-    if (read?.['denyOnly'])        cfg.readDenyOnly.push(...read['denyOnly'].map(expandPath));
-    if (read?.['allowWithinDeny']) cfg.readAllowWithinDeny.push(...read['allowWithinDeny'].map(expandPath));
-    if (write?.['allowOnly'])      cfg.writeAllowOnly.push(...write['allowOnly'].map(expandPath));
-    if (write?.['denyWithinAllow']) cfg.writeDenyWithinAllow.push(...write['denyWithinAllow'].map(expandPath));
+    // Only the keys defined by claude-code-settings.json are honored.
+    const aw = fs['allowWrite'] as string[] | undefined;
+    const dw = fs['denyWrite']  as string[] | undefined;
+    const dr = fs['denyRead']   as string[] | undefined;
+    const ar = fs['allowRead']  as string[] | undefined;
+    if (aw) cfg.allowWrite.push(...aw.map(expandPath));
+    if (dw) cfg.denyWrite.push(...dw.map(expandPath));
+    if (dr) cfg.denyRead.push(...dr.map(expandPath));
+    if (ar) cfg.allowRead.push(...ar.map(expandPath));
   }
 
-  // 1. Global user settings — long form
-  mergeFile(readJson(join(home, '.claude', 'settings.json')), false);
-
-  // 2. Project settings — short form (or long form if present)
+  // Merged in precedence order: user settings, then project, then local.
+  mergeFile(readJson(join(home, '.claude', 'settings.json')));
   for (const f of ['.claude/settings.json', '.claude/settings.local.json']) {
-    mergeFile(readJson(join(cwd, f)), true);
+    mergeFile(readJson(join(cwd, f)));
   }
 
   return cfg;
@@ -152,7 +141,7 @@ function isDirectory(p: string): boolean {
 
 function buildBwrapArgs(cfg: SandboxFsConfig, command: string): string[] {
   const args: string[] = ['--new-session', '--die-with-parent'];
-  const allowedWritePaths = cfg.writeAllowOnly.filter(existsSync);
+  const allowedWritePaths = cfg.allowWrite.filter(existsSync);
 
   // 1. Read-only root
   args.push('--ro-bind', '/', '/');
@@ -166,7 +155,7 @@ function buildBwrapArgs(cfg: SandboxFsConfig, command: string): string[] {
   const denyWriteArgs: string[] = [];
 
   // Mandatory write-deny: .git/hooks, .git/config
-  const mandatoryDeny = [...cfg.writeDenyWithinAllow];
+  const mandatoryDeny = [...cfg.denyWrite];
   const dotGit = join(cwd, '.git');
   if (isDirectory(dotGit)) {
     mandatoryDeny.push(join(cwd, '.git/hooks'), join(cwd, '.git/config'));
@@ -179,8 +168,8 @@ function buildBwrapArgs(cfg: SandboxFsConfig, command: string): string[] {
   }
 
   // 3. Read-deny dirs (tmpfs) + re-binds
-  const readAllowPaths = cfg.readAllowWithinDeny.filter(existsSync);
-  for (const denyDir of cfg.readDenyOnly) {
+  const readAllowPaths = cfg.allowRead.filter(existsSync);
+  for (const denyDir of cfg.denyRead) {
     if (!isDirectory(denyDir)) continue;
     args.push('--tmpfs', denyDir);
 
@@ -326,16 +315,16 @@ async function main() {
     const gcp = await setupGcp();
     configDir = gcp.configDir;
     extraEnv = { ...extraEnv, ...gcp.envVars };
-    cfg.writeAllowOnly.push(...gcp.dirs);
-    cfg.readAllowWithinDeny.push(...gcp.dirs);
+    cfg.allowWrite.push(...gcp.dirs);
+    cfg.allowRead.push(...gcp.dirs);
   }
 
   if (useGh) {
     const gh = await setupGh(ghPatName || basename(cwd));
     ghStateDir = gh.ghStateDir;
     extraEnv = { ...extraEnv, ...gh.envVars };
-    cfg.writeAllowOnly.push(...gh.dirs);
-    cfg.readAllowWithinDeny.push(...gh.dirs);
+    cfg.allowWrite.push(...gh.dirs);
+    cfg.allowRead.push(...gh.dirs);
   }
 
   const cleanup = () => {

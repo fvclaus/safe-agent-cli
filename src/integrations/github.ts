@@ -11,6 +11,26 @@ import { spawnSync } from 'node:child_process';
 
 $.verbose = false;
 
+function detectGithubOwner(): string | undefined {
+  const result = spawnSync('git', ['remote', 'get-url', 'origin'], { encoding: 'utf8' });
+  if (result.status !== 0) return undefined;
+  const url = result.stdout.trim();
+  // Matches both https://github.com/ORG/repo and git@github.com:ORG/repo
+  const match = url.match(/github\.com[/:]([\w.-]+)\//);
+  return match?.[1];
+}
+
+async function detectGithubOrg(): Promise<string | undefined> {
+  const owner = detectGithubOwner();
+  if (!owner) return undefined;
+  try {
+    const resp = await fetch(`https://api.github.com/orgs/${owner}`);
+    return resp.ok ? owner : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 export const githubCliOptions = {
   // flag() first so `--gh <agent-arg>` never swallows the next token;
   // an explicit PAT name therefore requires the `--gh=NAME` form.
@@ -89,9 +109,17 @@ export async function setupGithubIntegration({
       if (!githubToken) throw new Error('empty');
     }
   } catch {
+    const githubOrg = await detectGithubOrg();
+    const requiredPermissions = ['issues (read & write)', 'contents (read & write)', 'pull_requests (read & write)', 'actions (read & write)', 'workflows (read & write)'];
     log(chalk.bold.red('ERROR:') + ` No GitHub PAT found for "${patName}".`);
-    log('Create a fine-grained PAT (contents, pull_requests, actions, workflows — read & write):');
-    log(`  https://github.com/settings/personal-access-tokens/new?name=${encodeURIComponent(patName)}&expires_in=366&issues=write&contents=write&pull_requests=write&actions=write&workflows=write`);
+    log('Create a fine-grained PAT:');
+    if (githubOrg) {
+      log(`  https://github.com/settings/personal-access-tokens/new?name=${encodeURIComponent(patName)}&expires_in=365`);
+      log(`  Then set "Resource owner" to ${chalk.bold(githubOrg)} and grant read & write for:`);
+      for (const perm of requiredPermissions) log(`    - ${perm}`);
+    } else {
+      log(`  https://github.com/settings/personal-access-tokens/new?name=${encodeURIComponent(patName)}&expires_in=365&issues=write&contents=write&pull_requests=write&actions=write&workflows=write`);
+    }
     log('Then store it with:');
     if (isMacOS) {
       log(`  security add-generic-password -s github.pat -a ${patName} -w`);
@@ -106,6 +134,16 @@ export async function setupGithubIntegration({
     const resp = await fetch('https://api.github.com/user', {
       headers: { Authorization: `token ${githubToken}` },
     });
+    if (!resp.ok) {
+      log(chalk.bold.red('ERROR:') + ` GITHUB_TOKEN was rejected by GitHub (HTTP ${resp.status} ${resp.statusText}).`);
+      log('  The token is invalid, expired, or revoked. Create a new one and store it with:');
+      if (isMacOS) {
+        log(`  security add-generic-password -s github.pat -a ${patName} -w`);
+      } else {
+        log(`  secret-tool store --label="Github PAT ${patName}" github.pat ${patName}`);
+      }
+      process.exit(1);
+    }
     const scopes = resp.headers.get('x-oauth-scopes');
     const expiry = resp.headers.get('github-authentication-token-expiration');
     if (scopes !== null) {
@@ -120,9 +158,6 @@ export async function setupGithubIntegration({
 
       log(chalk.bold.green('OK:') + ' GITHUB_TOKEN is a fine-grained PAT.');
       if (expiry) log(`  Expires:     ${expiry}`);
-      log('  Permissions: contents (read & write), pull_requests (read & write),');
-      log('               actions (read & write), workflows (read & write)');
-      log('               (these are the minimum required; additional permissions may have been granted)');
     }
   } catch {
     log(chalk.bold.yellow('WARNING:') + ' Could not determine GitHub token info.');

@@ -14,3 +14,11 @@ dist/
 .zshrc
 .DS_store
 settings.local.json
+
+# Same, under .claude/. The masked *directories* (agents, commands, hooks,
+# routines, skills, workflows) are pre-created with a tracked .gitkeep by
+# safe-claude-code so bwrap binds over them instead of leaking stubs — see
+# ensureClaudeStubDirs() in src/adapters/claude-code.ts. These two are files,
+# not directories, so they can't be .gitkeep'd; ignore their launch-time stubs.
+.claude/launch.json
+.claude/scheduled_tasks.json
