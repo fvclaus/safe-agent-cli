@@ -1,5 +1,5 @@
 import chalk from 'chalk';
-import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, lstatSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { homedir } from 'node:os';
 import { fileURLToPath } from 'node:url';
@@ -44,6 +44,13 @@ const CLAUDE_MASKED_DIRS = ['agents', 'commands', 'hooks', 'routines', 'skills',
 function ensureClaudeStubDirs(): void {
   for (const name of CLAUDE_MASKED_DIRS) {
     const dir = join(process.cwd(), '.claude', name);
+    // A previous launch may have leaked a bind-mount stub here as a *file* (or
+    // symlink) rather than a directory. mkdirSync(recursive) is a no-op when the
+    // target is already a directory, but throws EEXIST when it's a non-directory
+    // — so clear that stub first before (re)creating the real directory.
+    if (existsSync(dir) && !lstatSync(dir).isDirectory()) {
+      rmSync(dir, { force: true });
+    }
     mkdirSync(dir, { recursive: true });
     const gitkeep = join(dir, '.gitkeep');
     if (!existsSync(gitkeep)) writeFileSync(gitkeep, '', 'utf8');
