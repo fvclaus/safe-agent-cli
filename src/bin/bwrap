@@ -1,67 +1,127 @@
-#!/bin/bash
-# Strip --unshare-net so the sandbox shares the host network namespace, making
-# processes the agent starts (e.g. a dev server) reachable from the host.
-#
-# Also fix Claude Code's network-proxy cleanup trap, which under zsh discards the
-# command's real exit code. Claude wraps each command with:
-#     trap "kill %1 %2 2>/dev/null; exit" EXIT
-# Under zsh a bare `exit` in a trap takes the status of the trap's last command
-# (the `kill`), so you get 0 when the socat relays are alive and 2 once they die.
-# Rewrite it to capture $? first. The 5-backslash form is what bash's ${//}
-# replacement must emit so the arg ends up with \\\$, which survives the nested
-# zsh -c "..." quoting and makes $?/$rc expand at trap-fire time in the sandbox.
-__t_old='kill %1 %2 2>/dev/null; exit'
-__t_new='rc=\\\\\$?; kill %1 %2 2>/dev/null; exit \\\\\$rc'
-args=()
-for a in "$@"; do
-  [ "$a" = "--unshare-net" ] && continue
-  a="${a//$__t_old/$__t_new}"
-  args+=("$a")
-done
+#!/usr/bin/env bun
+/**
+ * bwrap shim — intercepts Claude Code's sandbox invocations before they reach the
+ * real bwrap. The launcher puts this file on PATH ahead of the genuine bwrap and
+ * points REAL_BWRAP at the real one (see src/adapters/claude-code.ts).
+ *
+ * This file is the thin I/O layer: it reads argv/env, probes the filesystem, and
+ * execs the real bwrap. All argument-transformation logic lives in (and is
+ * unit-tested through) ./bwrap-transform.ts:
+ *
+ *   1. Strip `--unshare-net` so the sandbox shares the host network namespace,
+ *      making processes the agent starts (e.g. a dev server) reachable.
+ *   2. Fix Claude Code's proxy-cleanup trap so it preserves the real exit code.
+ *   3. Inject the missing gitdir binds when the project is a git worktree.
+ *   4. Honor `sandbox.filesystem.allowWrite` from the Claude settings files,
+ *      overriding the harness's hardcoded .claude/.git/dotfile deny wall.
+ */
+import { spawnSync } from 'node:child_process';
+import { appendFileSync, existsSync, readFileSync, statSync } from 'node:fs';
+import { join } from 'node:path';
+import {
+  appendWritableRebinds,
+  discoverProjectRoot,
+  injectWorktreeBinds,
+  isWithin,
+  resolveSettingsPath,
+  stripDenyWall,
+  stripNetAndFixTrap,
+  type WorktreeProbe,
+} from './bwrap-transform.js';
 
-# Detect worktree .git pointer files and inject the missing gitdir binds.
-# When a worktree is used, .git is a file containing "gitdir: <path>" pointing
-# into the main repo's .git/worktrees/<name>/ directory. Claude Code only binds
-# the pointer file itself, not the target — causing git to fail inside the sandbox.
-# The extra binds must be inserted before the "--" separator in the bwrap args.
-extra_binds=()
-i=0
-while [ $i -lt ${#args[@]} ]; do
-  if [ "${args[$i]}" = "--ro-bind" ] || [ "${args[$i]}" = "--bind" ]; then
-    src="${args[$((i+1))]}"
-    if [[ "$src" == *"/.git" ]] && [ -f "$src" ]; then
-      gitdir_line=$(grep '^gitdir:' "$src" 2>/dev/null)
-      if [ -n "$gitdir_line" ]; then
-        gitdir_path="${gitdir_line#gitdir: }"
-        gitdir_path="${gitdir_path%$'\r'}"
-        # .git/worktrees/<name> -> .git (main repo git dir)
-        main_git_dir="$(dirname "$(dirname "$gitdir_path")")"
-        # Both the main git dir and the worktree metadata dir need write access:
-        # main_git_dir (.git) for refs/heads, objects (commits), packed-refs
-        # gitdir_path (.git/worktrees/<name>) for HEAD, MERGE_HEAD, lock files
-        extra_binds+=(--bind "$main_git_dir" "$main_git_dir")
-        extra_binds+=(--bind "$gitdir_path" "$gitdir_path")
-      fi
-    fi
-  fi
-  ((i++))
-done
+const REAL_BWRAP = process.env['REAL_BWRAP'] || '/usr/bin/bwrap';
+const DEBUG = Boolean(process.env['BWRAP_WRAPPER_DEBUG']);
+const LOG = '/tmp/bwrap-wrapper.log';
+const HOME = process.env['HOME'] ?? '';
 
-# Insert extra_binds before the "--" separator so bwrap treats them as bind options.
-if [ ${#extra_binds[@]} -gt 0 ]; then
-  final_args=()
-  for a in "${args[@]}"; do
-    if [ "$a" = "--" ]; then
-      final_args+=("${extra_binds[@]}")
-    fi
-    final_args+=("$a")
-  done
-  args=("${final_args[@]}")
-fi
+function debugLog(line: string): void {
+  if (!DEBUG) return;
+  try {
+    appendFileSync(LOG, `[${new Date().toISOString()}] ${line}\n`);
+  } catch {
+    /* best-effort logging only */
+  }
+}
 
-if [ -n "$BWRAP_WRAPPER_DEBUG" ]; then
-  LOG="/tmp/bwrap-wrapper.log"
-  printf '[%s] exec: %s %s\n' "$(date -Iseconds)" "$REAL_BWRAP" "${args[*]}" >> "$LOG"
-fi
+// ── 1 & 2. Strip --unshare-net and fix the exit-code-eating trap ────────────────
+let args = stripNetAndFixTrap(process.argv.slice(2));
 
-exec "$REAL_BWRAP" "${args[@]}"
+// ── 3. Inject worktree gitdir binds ─────────────────────────────────────────────
+const worktreeProbe: WorktreeProbe = {
+  isPointerFile: (src) => existsSync(src) && statSync(src).isFile(),
+  readPointer: (src) => readFileSync(src, 'utf8'),
+};
+args = injectWorktreeBinds(args, worktreeProbe);
+
+// ── 4. Honor allowWrite by removing the harness's deny wall selectively ──────────
+const projectRoot = discoverProjectRoot(args, process.cwd());
+
+function readFilesystemArray(file: string, key: 'allowWrite' | 'denyWrite'): string[] {
+  try {
+    const parsed = JSON.parse(readFileSync(file, 'utf8')) as {
+      sandbox?: { filesystem?: Record<string, unknown> };
+    };
+    const arr = parsed?.sandbox?.filesystem?.[key];
+    return Array.isArray(arr) ? (arr as string[]) : [];
+  } catch {
+    return [];
+  }
+}
+
+const writePrefixes: string[] = [];
+const denyPrefixes: string[] = [];
+for (const file of [
+  join(HOME, '.claude', 'settings.json'),
+  join(projectRoot, '.claude', 'settings.json'),
+  join(projectRoot, '.claude', 'settings.local.json'),
+]) {
+  if (!existsSync(file)) continue;
+  for (const p of readFilesystemArray(file, 'allowWrite')) {
+    const r = resolveSettingsPath(p, projectRoot, HOME);
+    if (r) writePrefixes.push(r);
+  }
+  for (const p of readFilesystemArray(file, 'denyWrite')) {
+    const r = resolveSettingsPath(p, projectRoot, HOME);
+    if (r) denyPrefixes.push(r);
+  }
+}
+
+args = stripDenyWall(args, writePrefixes, denyPrefixes, (dest) => debugLog(`undeny: ${dest}`));
+
+// Re-bind whitelisted paths read-write after the deny wall so they win over any
+// ancestor deny (e.g. allowWrite ".claude/hooks/.venv" under a denied
+// ".claude/hooks"). Only bind paths that exist and aren't re-denied — bwrap fails
+// to bind a missing source.
+const rebindable = writePrefixes.filter(
+  (p) => existsSync(p) && !isWithin(p, denyPrefixes),
+);
+args = appendWritableRebinds(args, rebindable, (p) => debugLog(`rebind: ${p}`));
+
+// ── Exec the real bwrap ─────────────────────────────────────────────────────────
+// The old bash shim used `exec`, which preserves every inherited file descriptor.
+// spawnSync only wires up stdio (0-2) by default, but Claude Code passes the
+// seccomp filter program on an inherited fd (the sandboxed command runs
+// `ARGV0=apply-seccomp /proc/self/fd/3 …`). Forward the inherited fds to the same
+// numbers so bwrap — and the process it launches — still see them.
+//
+// Probe /proc/self/fd/<n> with existsSync rather than readdir: enumerating the
+// directory would open a transient fd that is closed again before spawnSync runs,
+// and forwarding that stale number as an integer would fail with EBADF.
+const stdio: Array<'inherit' | 'ignore' | number> = ['inherit', 'inherit', 'inherit'];
+for (let fd = 3; fd <= 20; fd++) {
+  stdio[fd] = existsSync(`/proc/self/fd/${fd}`) ? fd : 'ignore';
+}
+while (stdio.length > 3 && stdio[stdio.length - 1] === 'ignore') stdio.pop();
+
+debugLog(`exec: ${REAL_BWRAP} ${args.join(' ')}`);
+
+const result = spawnSync(REAL_BWRAP, args, { stdio });
+if (result.error) {
+  console.error(result.error);
+  process.exit(127);
+}
+if (result.signal) {
+  // Re-raise so the parent sees the same termination signal.
+  process.kill(process.pid, result.signal);
+}
+process.exit(result.status ?? 0);

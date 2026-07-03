@@ -10,7 +10,8 @@
   "scripts": {
     "start": "bun src/commands/claude-code.tsx",
     "start:codex": "bun src/commands/codex.tsx",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "test": "bun test"
   },
   "packageManager": "bun@1.3.14",
   "engines": {

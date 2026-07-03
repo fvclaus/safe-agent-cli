@@ -113,14 +113,82 @@ Commit messages should contain my name and email as author and email as per the 
 - Claude-specific launch behavior through a Claude adapter
 - Best-effort Codex launch behavior through a Codex adapter
 
-## Networking & the bwrap shim
+## The bwrap shim
 
-Claude Code sandboxes every Bash command with `bwrap` (bubblewrap). This repo
-ships a shim at [`src/bin/bwrap`](src/bin/bwrap), placed on `PATH` by the Claude
-adapter, that strips `--unshare-net` so the sandbox shares your **host network
-namespace** — letting processes the agent starts (a dev server, database, etc.)
-bind on the same `localhost` you reach from your machine. (It also injects the
-git-dir binds Claude Code omits for worktrees.)
+Claude Code sandboxes every Bash command with `bwrap` (bubblewrap), building the
+argument list itself. Some of those defaults are hardcoded in the harness and
+cannot be changed through settings. This repo ships a shim at
+[`src/bin/bwrap`](src/bin/bwrap) — placed on `PATH` ahead of the real `bwrap` by
+the Claude adapter (with `REAL_BWRAP` pointing at the genuine one) — that
+rewrites the arguments on the way through to fix four problems. The pure
+rewriting logic lives in [`src/bin/bwrap-transform.ts`](src/bin/bwrap-transform.ts)
+and is covered by unit tests.
+
+1. **Sandboxed processes are unreachable from the host.** Claude Code passes
+   `--unshare-net`, giving the sandbox its own network namespace, so a dev
+   server, database, or preview the agent starts can't be reached from your
+   machine. The shim strips `--unshare-net` so the sandbox shares your **host
+   network namespace** and everything binds on the same `localhost` you use.
+
+2. **Command exit codes are lost under zsh.** Claude Code wraps each command with
+   a proxy-cleanup trap, `trap "kill %1 %2 2>/dev/null; exit" EXIT`. Under zsh a
+   bare `exit` in a trap returns the status of the trap's last command (the
+   `kill`), so a passing command can report failure — or a failing one success —
+   depending on whether the network-proxy relays are still alive. The shim
+   rewrites the trap to capture `$?` first and re-exit with it, preserving the
+   command's real exit code.
+
+3. **git fails inside worktrees.** In a git worktree, `.git` is a *file*
+   containing `gitdir: <path>` that points into the main repo's
+   `.git/worktrees/<name>/`. Claude Code binds only the pointer file, not its
+   target, so git commands fail in the sandbox. The shim detects the pointer,
+   reads the target, and injects the missing read-write binds for both the main
+   git dir (`refs`, `objects`, `packed-refs`) and the worktree metadata dir
+   (`HEAD`, `MERGE_HEAD`, lock files).
+
+4. **`.claude/` can't be made writable through settings.** Claude Code binds the
+   project root read-write, then layers a hardcoded wall of `--ro-bind` mounts on
+   top that mask `.claude/settings.json`, `.claude/{hooks,skills,commands,agents,workflows,routines}`,
+   `.claude/.cc-writes`, `.mcp.json`, `.git/config`, the dotfiles, and more —
+   regardless of what `sandbox.filesystem.allowWrite` requests. The shim reads
+   the merged Claude settings (`~/.claude/settings.json`, then the project's
+   `.claude/settings.json` and `.claude/settings.local.json`) and, for any path
+   **explicitly** listed in `allowWrite`, makes it writable in two ways. Because
+   `bwrap` applies binds in order (last wins), it (a) drops any deny `--ro-bind`
+   whose target falls *inside* the whitelisted path — letting the earlier
+   read-write bind show through — and (b) re-binds the whitelisted path
+   read-write *after* the deny wall, so it also wins when it is nested under a
+   denied parent (e.g. `allowWrite: [".claude/hooks/.venv"]` while the harness
+   denies the whole `.claude/hooks`: the harness binds `.venv` rw but too early,
+   so its own parent deny shadows it — re-binding last fixes the ordering, and
+   the rest of `.claude/hooks` stays read-only). A `denyWrite` entry re-protects a
+   subtree.
+
+   The bare project root (`.`) is ignored on purpose — it is already the default
+   read-write mount, and honoring it would blanket-undeny `.git/config`,
+   `.mcp.json`, and the dotfiles too. To make the project's `.claude/` writable,
+   whitelist it explicitly:
+
+   ```json
+   // .claude/settings.local.json
+   {
+     "sandbox": {
+       "filesystem": { "allowWrite": [".", ".claude"] }
+     }
+   }
+   ```
+
+   > ⚠️ **Security note:** Claude Code hooks run on the *host*, outside the
+   > sandbox. Making `.claude/` writable lets an agent modify `.claude/hooks/` or
+   > the `hooks` block in `.claude/settings.json`, which then execute on the host
+   > on the next launch — a sandbox-escape vector. Whitelist only the paths you
+   > actually need writable, and use `denyWrite` to re-protect sensitive subtrees.
+
+### Debugging the shim
+
+Set `BWRAP_WRAPPER_DEBUG=1` before launching to append every rewritten `bwrap`
+invocation — plus each `.claude` deny it removes (`undeny:`) and each whitelisted
+path it re-binds (`rebind:`) — to `/tmp/bwrap-wrapper.log`.
 
 ## Architecture
 
@@ -138,9 +206,14 @@ Use Bun for all package management and scripts.
 ```bash
 bun install
 bun run typecheck
+bun test
 bun src/commands/claude-code.tsx --help
 bun src/commands/codex.tsx --help
 ```
+
+The bwrap shim's argument-rewriting logic is unit-tested in
+[`test/bwrap-transform.test.ts`](test/bwrap-transform.test.ts); run it with
+`bun test`.
 
 There is also a sandbox test harness:
 
@@ -152,4 +225,7 @@ bun scripts/test-sandbox.ts --gcp --project my-project "gcloud projects list"
 
 ## CI
 
-GitHub Actions runs TypeScript checking on push and pull request via `.github/workflows/tsc.yml`.
+On every push and pull request, GitHub Actions runs:
+
+- TypeScript checking via [`.github/workflows/tsc.yml`](.github/workflows/tsc.yml)
+- The unit test suite via [`.github/workflows/test.yml`](.github/workflows/test.yml)
