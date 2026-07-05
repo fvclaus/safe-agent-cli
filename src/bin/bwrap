@@ -25,7 +25,7 @@ import {
   isWithin,
   resolveSettingsPath,
   stripDenyWall,
-  stripNetAndFixTrap,
+  stripUnshareNetAndFixTrap,
   type WorktreeProbe,
 } from './bwrap-transform.js';
 
@@ -44,7 +44,7 @@ function debugLog(line: string): void {
 }
 
 // ── 1 & 2. Strip --unshare-net and fix the exit-code-eating trap ────────────────
-let args = stripNetAndFixTrap(process.argv.slice(2));
+let args = stripUnshareNetAndFixTrap(process.argv.slice(2));
 
 // ── 3. Inject worktree gitdir binds ─────────────────────────────────────────────
 const worktreeProbe: WorktreeProbe = {

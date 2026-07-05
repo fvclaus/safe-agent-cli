@@ -10,19 +10,21 @@ import { dirname, join } from 'node:path';
 // Claude Code wraps each sandboxed command with a proxy-cleanup trap:
 //     trap "kill %1 %2 2>/dev/null; exit" EXIT
 // Under zsh a bare `exit` in a trap takes the status of the trap's last command
-// (the `kill`), so the command's real exit code is lost. We rewrite it to capture
-// $? first. The three literal backslashes before each `$` are what must reach the
-// arg so the sequence survives the nested `zsh -c '...'` quoting and $?/$rc expand
-// at trap-fire time rather than when the trap is installed.
+// (the `kill`), so the command's real exit code is lost — verified directly:
+// `zsh -c 'trap "kill %1 %2 2>/dev/null; exit" EXIT; false'` reports 0, not 1.
+// Rewrite it to capture $? first. Exactly one backslash before each `$` is what
+// survives the single `zsh -c '...'` / `bash -c '...'` layer the harness actually
+// uses, so $?/$rc expand at trap-fire time rather than when the trap is
+// installed — verified against both `zsh -c` and `bash -c` directly; the fix is
+// shell-agnostic and a no-op risk-free under bash, which doesn't have this bug.
 export const OLD_TRAP = 'kill %1 %2 2>/dev/null; exit';
-// `\\\\\\$` in a JS string literal is three backslashes followed by `$`.
-export const NEW_TRAP = 'rc=\\\\\\$?; kill %1 %2 2>/dev/null; exit \\\\\\$rc';
+export const NEW_TRAP = 'rc=\\$?; kill %1 %2 2>/dev/null; exit \\$rc';
 
 /**
- * Step 1 & 2: drop `--unshare-net` (so the sandbox shares the host network
+ * Step 1: drop `--unshare-net` (so the sandbox shares the host network
  * namespace) and rewrite the exit-code-eating trap in every argument.
  */
-export function stripNetAndFixTrap(argv: readonly string[]): string[] {
+export function stripUnshareNetAndFixTrap(argv: readonly string[]): string[] {
   const out: string[] = [];
   for (const a of argv) {
     if (a === '--unshare-net') continue;

@@ -9,42 +9,42 @@ import {
   parseGitdir,
   resolveSettingsPath,
   stripDenyWall,
-  stripNetAndFixTrap,
+  stripUnshareNetAndFixTrap,
   type WorktreeProbe,
 } from '../src/bin/bwrap-transform.js';
 
-describe('stripNetAndFixTrap', () => {
+describe('stripUnshareNetAndFixTrap', () => {
   test('drops --unshare-net so the sandbox shares the host network namespace', () => {
-    expect(stripNetAndFixTrap(['a', '--unshare-net', 'b'])).toEqual(['a', 'b']);
+    expect(stripUnshareNetAndFixTrap(['a', '--unshare-net', 'b'])).toEqual(['a', 'b']);
   });
 
   test('leaves unrelated args untouched', () => {
     const args = ['--ro-bind', '/', '/', '--dev', '/dev'];
-    expect(stripNetAndFixTrap(args)).toEqual(args);
+    expect(stripUnshareNetAndFixTrap(args)).toEqual(args);
   });
 
   test('rewrites the trap so the real exit code is captured', () => {
     const arg = `socat &\ntrap "${OLD_TRAP}" EXIT`;
-    expect(stripNetAndFixTrap([arg])).toEqual([`socat &\ntrap "${NEW_TRAP}" EXIT`]);
+    expect(stripUnshareNetAndFixTrap([arg])).toEqual([`socat &\ntrap "${NEW_TRAP}" EXIT`]);
   });
 
   test('applies the trap rewrite exactly once (no doubling)', () => {
-    const [out] = stripNetAndFixTrap([`pre ${OLD_TRAP} post`]);
+    const [out] = stripUnshareNetAndFixTrap([`pre ${OLD_TRAP} post`]);
     expect(out).toBe(`pre ${NEW_TRAP} post`);
-    // Regression guard: the earlier bug produced "rc=…; rc=…" and "$rc $rc".
     expect(out!.match(/rc=/g)).toHaveLength(1);
-    expect(out!.match(/exit \\\\\\\$rc(?! \\)/g)).toHaveLength(1);
   });
 
-  test('NEW_TRAP carries exactly three backslashes before each $', () => {
-    // Three before $? and three before $rc = six total. This precise count is what
-    // survives the nested `zsh -c` quoting so $?/$rc expand at trap-fire time.
-    expect(NEW_TRAP).toBe('rc=\\\\\\$?; kill %1 %2 2>/dev/null; exit \\\\\\$rc');
-    expect(NEW_TRAP.match(/\\/g)).toHaveLength(6);
+  test('NEW_TRAP carries exactly one backslash before each $', () => {
+    // Verified directly against real `zsh -c` and `bash -c`: one backslash is
+    // what survives the single -c '...' layer the harness actually uses, and
+    // fixes the exit-code bug (zsh: 0 -> 1 for a failing command) without
+    // affecting bash, which never had the bug.
+    expect(NEW_TRAP).toBe('rc=\\$?; kill %1 %2 2>/dev/null; exit \\$rc');
+    expect(NEW_TRAP.match(/\\/g)).toHaveLength(2);
   });
 
   test('no-op when the trap is absent', () => {
-    expect(stripNetAndFixTrap(['echo hi'])).toEqual(['echo hi']);
+    expect(stripUnshareNetAndFixTrap(['echo hi'])).toEqual(['echo hi']);
   });
 });
 

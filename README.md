@@ -136,7 +136,8 @@ and is covered by unit tests.
    `kill`), so a passing command can report failure — or a failing one success —
    depending on whether the network-proxy relays are still alive. The shim
    rewrites the trap to capture `$?` first and re-exit with it, preserving the
-   command's real exit code.
+   command's real exit code. This is a no-op under bash, which doesn't have the
+   bug.
 
 3. **git fails inside worktrees.** In a git worktree, `.git` is a *file*
    containing `gitdir: <path>` that points into the main repo's
