@@ -113,6 +113,29 @@ Commit messages should contain my name and email as author and email as per the 
 - Claude-specific launch behavior through a Claude adapter
 - Best-effort Codex launch behavior through a Codex adapter
 
+## User settings
+
+safe-agent-cli reads an optional settings file from
+`$XDG_CONFIG_HOME/safe-agent-cli/settings.json` (default:
+`~/.config/safe-agent-cli/settings.json`). Missing file means all defaults.
+
+Parsing is strict: malformed JSON or a wrong type aborts the launch, and
+unrecognized keys print a warning — an opt-in setting disabled by a typo would
+otherwise fail silently, which is the exact failure mode this tool exists to
+prevent.
+
+| Setting | Type | Default | Effect |
+|---------|------|---------|--------|
+| `checkRtk` | boolean | `false` | Before launching Claude, verify [rtk](https://github.com/rtk-ai/rtk) is initialized: the `rtk` binary is on PATH, `~/.claude/settings.json` contains the `rtk hook claude` PreToolUse hook, and `~/.claude/RTK.md` exists. Any failure aborts the launch with a hint to run `rtk init -g`. |
+
+Example:
+
+```json
+{
+  "checkRtk": true
+}
+```
+
 ## The bwrap shim
 
 Claude Code sandboxes every Bash command with `bwrap` (bubblewrap), building the

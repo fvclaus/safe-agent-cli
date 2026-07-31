@@ -6,6 +6,7 @@ import { fileURLToPath } from 'node:url';
 import { spawnSync } from 'node:child_process';
 import type { AgentAdapter } from '../launcher/safe-agent-cli.js';
 import { mergeReadPaths, safeChainReadPaths } from '../safe-chain.js';
+import { loadUserSettings } from '../user-settings.js';
 
 const log = (msg: string) => process.stderr.write(msg + '\n');
 
@@ -206,6 +207,65 @@ function ensureUserSafeChainReadAccess(): void {
   log(chalk.bold.green('OK:') + ` granted sandbox read access to safe-chain in ${settingsPath}: ${added.join(', ')}`);
 }
 
+// rtk (https://github.com/rtk-ai/rtk) rewrites Bash calls through a PreToolUse
+// hook to compress command output. When it's absent or half-installed, Claude
+// runs fine but burns tokens all session with nothing to flag it — so users who
+// opt in via the `checkRtk` user setting get a hard stop instead.
+const RTK_HOOK_COMMAND = 'rtk hook claude';
+
+/** True when Claude Code settings contain the PreToolUse hook `rtk init -g` installs. */
+export function hasRtkHook(settings: unknown): boolean {
+  if (typeof settings !== 'object' || settings === null) return false;
+  const hooks = (settings as Record<string, unknown>)['hooks'];
+  if (typeof hooks !== 'object' || hooks === null) return false;
+  const preToolUse = (hooks as Record<string, unknown>)['PreToolUse'];
+  if (!Array.isArray(preToolUse)) return false;
+  return preToolUse.some(entry => {
+    if (typeof entry !== 'object' || entry === null) return false;
+    const inner = (entry as Record<string, unknown>)['hooks'];
+    return Array.isArray(inner) && inner.some(h =>
+      typeof h === 'object' && h !== null &&
+      typeof (h as Record<string, unknown>)['command'] === 'string' &&
+      ((h as Record<string, unknown>)['command'] as string).trim() === RTK_HOOK_COMMAND,
+    );
+  });
+}
+
+function verifyRtkInitialized(): void {
+  const failures: string[] = [];
+
+  const which = spawnSync('which', ['rtk'], { encoding: 'utf8' });
+  if (which.status !== 0) {
+    failures.push('the `rtk` binary is not on PATH');
+  }
+
+  // verifyClaudeSettingsJson ran before us, so if the file exists it parses.
+  const settingsPath = join(homedir(), '.claude', 'settings.json');
+  let hookInstalled = false;
+  if (existsSync(settingsPath)) {
+    try {
+      hookInstalled = hasRtkHook(JSON.parse(readFileSync(settingsPath, 'utf8')));
+    } catch { /* malformed — treated as hook missing */ }
+  }
+  if (!hookInstalled) {
+    failures.push(`no PreToolUse hook "${RTK_HOOK_COMMAND}" in ${settingsPath}`);
+  }
+
+  const rtkMdPath = join(homedir(), '.claude', 'RTK.md');
+  if (!existsSync(rtkMdPath)) {
+    failures.push(`${rtkMdPath} does not exist`);
+  }
+
+  if (failures.length === 0) {
+    log(chalk.bold.green('OK:') + ' rtk is initialized');
+    return;
+  }
+  log(chalk.bold.red('ERROR:') + ' checkRtk is enabled but rtk is not properly initialized:');
+  for (const f of failures) log(`  - ${f}`);
+  log('Fix with: rtk init -g   (see https://github.com/rtk-ai/rtk)');
+  process.exit(1);
+}
+
 export const claudeCodeAdapter: AgentAdapter = {
   programName: 'safe-claude-code',
   brief: 'Launch Claude Code with GCP service-account impersonation.',
@@ -214,6 +274,7 @@ export const claudeCodeAdapter: AgentAdapter = {
   launchLabel: 'Claude Code',
   prepareLaunch: () => {
     verifyClaudeSettingsJson();
+    if (loadUserSettings(log).checkRtk) verifyRtkInitialized();
     ensureClaudeStubDirs();
     ensureGitignoreStubs();
     ensureClaudeSandboxEnabled();
