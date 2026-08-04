@@ -126,15 +126,59 @@ prevent.
 
 | Setting | Type | Default | Effect |
 |---------|------|---------|--------|
-| `checkRtk` | boolean | `false` | Before launching Claude, verify [rtk](https://github.com/rtk-ai/rtk) is initialized: the `rtk` binary is on PATH, `~/.claude/settings.json` contains the `rtk hook claude` PreToolUse hook, and `~/.claude/RTK.md` exists. Any failure aborts the launch with a hint to run `rtk init -g`. |
+| `checkRtk` | boolean | `false` | Before launching Claude, verify [rtk](https://github.com/rtk-ai/rtk) is initialized: the `rtk` binary is on PATH and `~/.claude/settings.json` contains the `rtk hook claude` PreToolUse hook. Any failure aborts the launch with a hint to run `rtk init -g`. When `claudeFragmentsDir` is also set, `~/.claude/RTK.md` is read and appended to the generated `CLAUDE.local.md` (see below) — its existence is checked there instead, as part of generation. |
+| `claudeFragmentsDir` | string | unset | Its presence is the on/off switch — when set, every `safe-claude-code` launch regenerates `CLAUDE.local.md` in the current repo from the markdown fragments in this directory (see "CLAUDE.local.md generation" below). Unset means the feature is entirely skipped. |
 
 Example:
 
 ```json
 {
-  "checkRtk": true
+  "checkRtk": true,
+  "claudeFragmentsDir": "~/shared-work/claude/fragments"
 }
 ```
+
+## CLAUDE.local.md generation
+
+When `claudeFragmentsDir` is set, `safe-claude-code` regenerates `CLAUDE.local.md`
+in the current repo's root before every launch, composed from the `*.md`
+fragments in that directory. Each fragment may carry YAML frontmatter scoping
+it to a specific context:
+
+```markdown
+---
+org: developer-akademie-gmbh
+isolation: [proxy, sbx]
+---
+Rules that only apply in Developer-Akademie-GmbH repos.
+```
+
+- `org` matches the repo's GitHub owner (case-insensitive), parsed from the
+  `origin` remote. A repo with no remote at all doesn't fail — org-scoped
+  fragments simply don't match. A remote on a host other than `github.com`
+  aborts generation (and the launch).
+- `isolation` matches `proxy` (the default, plain host launches) or `sbx`
+  (reserved for future Docker-sandbox integration — nothing sets this today).
+- Both keys accept a single string or a list (OR within a key); when a
+  fragment sets more than one key, all of them must match (AND across keys).
+- A key a fragment omits is a wildcard for that dimension; a fragment with no
+  frontmatter at all always matches.
+
+Matching fragments are concatenated in alphabetical filename order, each
+preceded by a comment naming its source path, under a header noting the file
+is auto-generated and pointing back at `claudeFragmentsDir` — so an agent
+asked to change an instruction knows to edit the fragment, not the generated
+file. Any problem (a missing fragments directory, malformed frontmatter, an
+unsupported git remote) aborts the launch outright; this feature never
+silently degrades.
+
+When `checkRtk` is also enabled, `~/.claude/RTK.md` is read and appended last,
+unconditionally (treated like a fragment with no frontmatter) — this replaces
+a hand-maintained `@RTK.md` import in `CLAUDE.md`. A missing `RTK.md` aborts
+the launch here rather than in `checkRtk`'s own verification. Note this makes
+RTK.md's inclusion depend on `claudeFragmentsDir` being set: with `checkRtk`
+enabled but `claudeFragmentsDir` unset, RTK.md's content isn't included
+anywhere by this tool.
 
 ## The bwrap shim
 

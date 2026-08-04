@@ -8,16 +8,13 @@ import { mkdtempSync, mkdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, basename } from 'node:path';
 import { spawnSync } from 'node:child_process';
+import { getOriginUrl, parseGithubOwner } from '../git-remote.js';
 
 $.verbose = false;
 
 function detectGithubOwner(): string | undefined {
-  const result = spawnSync('git', ['remote', 'get-url', 'origin'], { encoding: 'utf8' });
-  if (result.status !== 0) return undefined;
-  const url = result.stdout.trim();
-  // Matches both https://github.com/ORG/repo and git@github.com:ORG/repo
-  const match = url.match(/github\.com[/:]([\w.-]+)\//);
-  return match?.[1];
+  const url = getOriginUrl();
+  return url ? parseGithubOwner(url) : undefined;
 }
 
 async function detectGithubOrg(): Promise<string | undefined> {

@@ -7,6 +7,7 @@ import { spawnSync } from 'node:child_process';
 import type { AgentAdapter } from '../launcher/safe-agent-cli.js';
 import { mergeReadPaths, safeChainReadPaths } from '../safe-chain.js';
 import { loadUserSettings } from '../user-settings.js';
+import { expandHome, generateClaudeLocalMd } from '../claude-fragments.js';
 
 const log = (msg: string) => process.stderr.write(msg + '\n');
 
@@ -251,10 +252,12 @@ function verifyRtkInitialized(): void {
     failures.push(`no PreToolUse hook "${RTK_HOOK_COMMAND}" in ${settingsPath}`);
   }
 
-  const rtkMdPath = join(homedir(), '.claude', 'RTK.md');
-  if (!existsSync(rtkMdPath)) {
-    failures.push(`${rtkMdPath} does not exist`);
-  }
+  // RTK.md's existence is no longer checked here: when claudeFragmentsDir is
+  // also set, generateClaudeLocalMdOrExit reads and appends it itself, and
+  // fails the launch just as hard if it's missing. (If claudeFragmentsDir is
+  // NOT set, that fallback doesn't run — RTK.md's presence goes unchecked in
+  // that case, same as its content going unincluded without the old
+  // hand-maintained `@RTK.md` import in CLAUDE.md.)
 
   if (failures.length === 0) {
     log(chalk.bold.green('OK:') + ' rtk is initialized');
@@ -266,6 +269,41 @@ function verifyRtkInitialized(): void {
   process.exit(1);
 }
 
+// A global ~/.claude/CLAUDE.md is easy to forget about once you've moved to
+// fragment-generated CLAUDE.local.md — its content isn't part of any
+// fragment and won't show up there. Non-fatal: existing is a plausible
+// deliberate choice (e.g. content that doesn't fit the fragment model), not
+// an error, so this only warns rather than aborting.
+function warnIfGlobalClaudeMdExists(): void {
+  const path = join(homedir(), '.claude', 'CLAUDE.md');
+  if (existsSync(path)) {
+    log(
+      chalk.bold.yellow('WARNING:') +
+        ` ${path} exists — its content is separate from the fragments in claudeFragmentsDir and won't appear in the generated CLAUDE.local.md.`,
+    );
+  }
+}
+
+// claudeFragmentsDir's mere presence is the on/off switch for generating
+// CLAUDE.local.md (see user-settings.ts) — no separate boolean. Any failure
+// (missing dir, malformed fragment, non-GitHub remote) aborts the launch,
+// same as verifyRtkInitialized: this feature never silently degrades.
+function generateClaudeLocalMdOrExit(fragmentsDir: string, checkRtk: boolean): void {
+  const dir = expandHome(fragmentsDir, homedir());
+  const rtkMdPath = checkRtk ? join(homedir(), '.claude', 'RTK.md') : undefined;
+  try {
+    const result = generateClaudeLocalMd(dir, process.cwd(), 'proxy', rtkMdPath);
+    log(
+      chalk.bold.green('OK:') +
+        ` generated CLAUDE.local.md from ${result.matchedCount}/${result.totalCount} fragment(s) in ${dir}` +
+        (result.rtkAppended ? ' (+ RTK.md)' : ''),
+    );
+  } catch (e) {
+    log(chalk.bold.red('ERROR:') + ` failed to generate CLAUDE.local.md: ${e instanceof Error ? e.message : String(e)}`);
+    process.exit(1);
+  }
+}
+
 export const claudeCodeAdapter: AgentAdapter = {
   programName: 'safe-claude-code',
   brief: 'Launch Claude Code with GCP service-account impersonation.',
@@ -274,7 +312,10 @@ export const claudeCodeAdapter: AgentAdapter = {
   launchLabel: 'Claude Code',
   prepareLaunch: () => {
     verifyClaudeSettingsJson();
-    if (loadUserSettings(log).checkRtk) verifyRtkInitialized();
+    const settings = loadUserSettings(log);
+    if (settings.checkRtk) verifyRtkInitialized();
+    warnIfGlobalClaudeMdExists();
+    if (settings.claudeFragmentsDir) generateClaudeLocalMdOrExit(settings.claudeFragmentsDir, settings.checkRtk);
     ensureClaudeStubDirs();
     ensureGitignoreStubs();
     ensureClaudeSandboxEnabled();
