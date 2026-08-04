@@ -22,6 +22,7 @@ describe('parseUserSettings', () => {
   test('empty object yields defaults with no issues', () => {
     const r = parseUserSettings('{}');
     expect(r.settings).toEqual({ checkRtk: false });
+    expect(r.settings.claudeFragmentsDir).toBeUndefined();
     expect(r.warnings).toEqual([]);
     expect(r.errors).toEqual([]);
   });
@@ -56,6 +57,23 @@ describe('parseUserSettings', () => {
     expect(r.warnings).toHaveLength(1);
     expect(r.warnings[0]).toContain('checkRTK');
     expect(r.errors).toEqual([]);
+  });
+
+  test('reads claudeFragmentsDir', () => {
+    const r = parseUserSettings('{"claudeFragmentsDir": "~/shared/claude/fragments"}');
+    expect(r.settings.claudeFragmentsDir).toBe('~/shared/claude/fragments');
+    expect(r.errors).toEqual([]);
+  });
+
+  test('non-string claudeFragmentsDir is an error', () => {
+    const r = parseUserSettings('{"claudeFragmentsDir": 123}');
+    expect(r.errors).toHaveLength(1);
+    expect(r.errors[0]).toContain('"claudeFragmentsDir" must be a non-empty string');
+  });
+
+  test('empty-string claudeFragmentsDir is an error', () => {
+    const r = parseUserSettings('{"claudeFragmentsDir": "  "}');
+    expect(r.errors).toHaveLength(1);
   });
 
   test('$schema is tolerated silently', () => {

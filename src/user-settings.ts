@@ -14,6 +14,12 @@ import { join } from 'node:path';
 export interface UserSettings {
   /** Verify rtk (https://github.com/rtk-ai/rtk) is initialized before launching Claude. */
   checkRtk: boolean;
+  /**
+   * Directory of markdown fragments to compose into CLAUDE.local.md before
+   * each launch. Its mere presence is the on/off switch for this feature —
+   * there is no separate boolean; leave it unset to skip generation entirely.
+   */
+  claudeFragmentsDir?: string;
 }
 
 const DEFAULTS: UserSettings = { checkRtk: false };
@@ -64,8 +70,14 @@ export function parseUserSettings(content: string): ParsedUserSettings {
         continue;
       }
       settings.checkRtk = value;
+    } else if (key === 'claudeFragmentsDir') {
+      if (typeof value !== 'string' || value.trim() === '') {
+        errors.push(`"claudeFragmentsDir" must be a non-empty string, got ${JSON.stringify(value)}`);
+        continue;
+      }
+      settings.claudeFragmentsDir = value;
     } else if (!IGNORED_KEYS.has(key)) {
-      warnings.push(`unrecognized key "${key}" — check for typos (known keys: checkRtk)`);
+      warnings.push(`unrecognized key "${key}" — check for typos (known keys: checkRtk, claudeFragmentsDir)`);
     }
   }
 
