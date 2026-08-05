@@ -29,6 +29,50 @@ MUST use **bun** for all package management and script execution. NEVER use npm,
 
 When refactoring, keep agent-specific logic out of the shared launcher whenever possible. Shared code should handle orchestration; adapters and integrations should own provider-specific behavior.
 
+## Design principle: no hardcoded user/host-specific content
+
+This tool runs for every user, on every machine — never hardcode a path, username,
+or piece of config that's specific to one person's setup (e.g. a particular
+person's notification hook wiring, a fixed host path under their home directory).
+User-specific behavior belongs in files the user supplies themselves (e.g.
+`~/.claude/settings.json`, or `~/.claude/settings-sbx.json` for sbx-specific
+hooks); safe-agent-cli only reads and merges what's there — it never ships or
+assumes the content. See the Sandbox Harness section below for the existing
+precedent (`.claude/settings*.json`, no hardcoded paths beyond mandatory Git
+safety denies).
+
+## sbx adapter (`sbx-claude-code`)
+
+Separate from `safe-claude-code`'s bwrap-based (`proxy`) isolation — long-term
+merge intended, deferred until the shape of both is less fuzzy. Orchestrates a
+user-supplied sandbox script (e.g. `claude-generic.sh`, passed via
+`--generic-script`, no default) through `build` → generate `CLAUDE.local.md`
+(isolation `sbx`) → merge `~/.claude/settings-sbx.json`'s `hooks` into the
+sandbox's in-container `~/.claude/settings.json` (via `sbx cp`, preserving
+every other key Claude Code itself already wrote there) → the launch command.
+See `src/sbx/`.
+
+Only `build` and `resolve-name` are part of the generic script's contract —
+both are needed by the orchestrator itself. The final launch step is whatever
+the caller passes after `--` (e.g. `-- run`), passed through verbatim, so no
+command name is assumed to exist on the script. It's required: there is no
+default launch command.
+
+Switches after the launch command name are forwarded to `build` and
+`resolve-name` too, because a switch can change *which* sandbox is meant — e.g.
+`claude-generic.sh`'s `--clone` changes the sandbox name, so without forwarding
+we'd build and inject hooks into one sandbox and launch another, silently. This
+means mode must be expressed as a switch: `-- run --clone`, not `-- clone`
+(a bare command name doesn't propagate).
+
+`~/.claude/settings-sbx.json` is user-authored and required (hard error if
+missing/malformed) — safe-agent-cli never ships or assumes its content, per
+the design principle above.
+
+```bash
+sbx-claude-code --generic-script ~/workspace/infrastructure/sbx/claude-generic.sh -- run
+```
+
 ## IMPORTANT: Testing changes
 
 **You are running without the real agent sandbox. You MUST test every change before reporting it as complete.**

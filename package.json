@@ -5,11 +5,13 @@
   "type": "module",
   "bin": {
     "safe-claude-code": "./bin/safe-claude-code",
-    "safe-codex": "./bin/safe-codex"
+    "safe-codex": "./bin/safe-codex",
+    "sbx-claude-code": "./bin/sbx-claude-code"
   },
   "scripts": {
     "start": "bun src/commands/claude-code.tsx",
     "start:codex": "bun src/commands/codex.tsx",
+    "start:sbx": "bun src/commands/sbx-claude-code.ts",
     "typecheck": "tsc --noEmit",
     "test": "bun test"
   },
