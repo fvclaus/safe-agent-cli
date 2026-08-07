@@ -2,26 +2,19 @@ import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'no
 import { spawnSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { resolveSandboxHome } from './home.js';
+import type { SettingsSbx } from './settings-sbx.js';
 
 // The sandbox's in-container ~/.claude/settings.json already carries real
 // state Claude Code itself writes on first run (theme, bypassPermissions
 // mode, etc.) — confirmed by inspecting a live sandbox. `sbx cp` (the only
 // way to move a file in/out of the sandbox) overwrites its destination
-// outright, like `docker cp`, so this pulls the existing file out, replaces
-// only its `hooks` key, and pushes the result back — every other key survives.
+// outright, like `docker cp`, so this pulls the existing file out, overlays
+// every key settings-sbx.json declares, and pushes the result back — every
+// key settings-sbx.json doesn't mention (e.g. theme, or `tui` if the user
+// never set it there) survives untouched.
 
-function resolveSandboxHome(sandboxName: string): string {
-  const result = spawnSync('sbx', ['exec', sandboxName, 'bash', '-c', 'printf %s "$HOME"'], { encoding: 'utf8' });
-  if (result.error) throw result.error;
-  if ((result.status ?? 1) !== 0) {
-    throw new Error(`could not resolve $HOME inside sandbox '${sandboxName}': ${result.stderr}`);
-  }
-  const home = result.stdout.trim();
-  if (!home) throw new Error(`sandbox '${sandboxName}' returned an empty $HOME`);
-  return home;
-}
-
-export function mergeHooksIntoSandbox(sandboxName: string, hooks: unknown): void {
+export function mergeSettingsSbxIntoSandbox(sandboxName: string, settingsSbx: SettingsSbx): void {
   const home = resolveSandboxHome(sandboxName);
   const remotePath = `${sandboxName}:${home}/.claude/settings.json`;
 
@@ -44,8 +37,8 @@ export function mergeHooksIntoSandbox(sandboxName: string, hooks: unknown): void
       }
     }
 
-    existing['hooks'] = hooks;
-    writeFileSync(localPath, JSON.stringify(existing, null, 2) + '\n', 'utf8');
+    const merged = { ...existing, ...settingsSbx.values };
+    writeFileSync(localPath, JSON.stringify(merged, null, 2) + '\n', 'utf8');
 
     const push = spawnSync('sbx', ['cp', localPath, remotePath], { encoding: 'utf8' });
     if (push.error) throw push.error;

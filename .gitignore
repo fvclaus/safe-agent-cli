@@ -22,3 +22,6 @@ settings.local.json
 # not directories, so they can't be .gitkeep'd; ignore their launch-time stubs.
 .claude/launch.json
 .claude/scheduled_tasks.json
+
+
+CLAUDE.local.md

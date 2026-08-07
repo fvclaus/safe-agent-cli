@@ -68,7 +68,12 @@ export function resolveSandboxName(scriptPath: string, switches: string[] = []):
   if (status !== 0) {
     throw new Error(`${scriptPath} resolve-name exited with code ${status}: ${result.stderr}`);
   }
-  const name = result.stdout.trim();
+  // Scripts that delegate to a project-specific wrapper may print a
+  // diagnostic line to stdout before the name (e.g. "delegating to it...").
+  // The contract only guarantees the name is the last thing printed, so take
+  // the last non-empty line rather than the whole trimmed output.
+  const lines = result.stdout.split('\n').map((line) => line.trim()).filter(Boolean);
+  const name = lines.at(-1);
   if (!name) throw new Error(`${scriptPath} resolve-name printed no output`);
   return name;
 }

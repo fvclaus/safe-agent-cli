@@ -1,14 +1,18 @@
 #!/usr/bin/env bun
 import chalk from 'chalk';
+import { existsSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { expandHome, generateClaudeLocalMd } from '../claude-fragments.js';
 import { requireGenericScript, resolveSandboxName, runGenericScript } from '../sbx/generic-script.js';
-import { mergeHooksIntoSandbox } from '../sbx/merge-settings.js';
+import { syncSkillsIntoSandbox } from '../sbx/copy-skills.js';
+import { mergeSettingsSbxIntoSandbox } from '../sbx/merge-settings.js';
 import { loadSettingsSbx } from '../sbx/settings-sbx.js';
 import { loadUserSettings } from '../user-settings.js';
 
-const log = (msg: string) => process.stderr.write(msg + '\n');
+const log = (msg: string) => {
+  process.stderr.write(msg + '\n');
+};
 
 interface Args {
   genericScript?: string;
@@ -67,8 +71,16 @@ Required:
                              that gets prepared would not be the one launched.
 
 Reads (required, hard error if missing or malformed):
-  ~/.claude/settings-sbx.json   User-authored hooks to merge into the
-                                 sandbox's in-container ~/.claude/settings.json.
+  ~/.claude/settings-sbx.json   User-authored settings.json overlay: every key
+                                 it declares (must include "hooks") is merged
+                                 into the sandbox's in-container
+                                 ~/.claude/settings.json, overwriting only
+                                 those keys — everything else Claude Code
+                                 itself wrote survives. E.g. add "tui":
+                                 "default" here to keep Claude Code's
+                                 terminal-UI renderer off fullscreen (avoids it
+                                 wiping this script's setup output) across
+                                 every sandbox rebuild.
 
 Also honors claudeFragmentsDir / checkRtk from
 ~/.config/safe-agent-cli/settings.json, same as safe-claude-code — generates
@@ -119,8 +131,22 @@ async function main(): Promise<void> {
     );
   }
 
-  mergeHooksIntoSandbox(sandboxName, settingsSbx.hooks);
-  log(chalk.bold.green('OK:') + ` merged hooks from ${settingsSbxPath} into sandbox '${sandboxName}'`);
+  mergeSettingsSbxIntoSandbox(sandboxName, settingsSbx);
+  const mergedKeys = Object.keys(settingsSbx.values).join(', ');
+  log(chalk.bold.green('OK:') + ` merged {${mergedKeys}} from ${settingsSbxPath} into sandbox '${sandboxName}'`);
+
+  // Mirror host ~/.claude/skills into the sandbox (always-on when the host dir
+  // exists). Host-wins per skill; sandbox-local skills are preserved and
+  // host-synced skills the host dropped are pruned — see copy-skills.ts.
+  const hostSkillsDir = join(homedir(), '.claude', 'skills');
+  if (existsSync(hostSkillsDir)) {
+    const skills = syncSkillsIntoSandbox(sandboxName, hostSkillsDir);
+    log(
+      chalk.bold.green('OK:') +
+        ` skills: synced ${skills.synced.length}, pruned ${skills.pruned.length} in ${skills.totalMs.toFixed(0)}ms` +
+        ` into sandbox '${sandboxName}'`,
+    );
+  }
 
   log(chalk.bold.cyan('>>') + ` ${genericScript} ${args.launchCommand.join(' ')}`);
   runGenericScript(genericScript, args.launchCommand);

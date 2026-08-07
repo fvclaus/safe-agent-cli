@@ -2,20 +2,23 @@ import { existsSync, readFileSync } from 'node:fs';
 
 // ~/.claude/settings-sbx.json is a user-authored file, distinct from both
 // Claude Code's own .claude/settings*.json and safe-agent-cli's own
-// ~/.config/safe-agent-cli/settings.json (see user-settings.ts). It declares
-// the `hooks` sbx-claude-code should merge into a running sandbox's
-// in-container ~/.claude/settings.json (e.g. notification hooks pointed at a
-// host-side relay) — see CLAUDE.md. safe-agent-cli never ships or assumes its
-// content, only reads it.
+// ~/.config/safe-agent-cli/settings.json (see user-settings.ts). Every key it
+// declares gets merged into the sandbox's in-container ~/.claude/settings.json
+// (e.g. `hooks` for notification hooks pointed at a host-side relay, or `tui`
+// to pin the terminal-UI-renderer preference) — see CLAUDE.md. safe-agent-cli
+// never ships or assumes its content, only reads and forwards it verbatim;
+// it doesn't need to know what any given key means.
 //
 // Unlike claudeFragmentsDir (an opt-in feature whose absence just skips it),
 // this file is REQUIRED: sbx-claude-code has no useful default hook wiring of
 // its own, so a missing or malformed file is a hard error rather than a
-// silent no-op.
+// silent no-op. `hooks` specifically must be present for the same reason;
+// every other key is whatever the user chooses to declare.
 
 export interface SettingsSbx {
   path: string;
-  hooks: unknown;
+  /** Every key declared in settings-sbx.json, merged verbatim into the sandbox's settings.json. */
+  values: Record<string, unknown>;
 }
 
 export function loadSettingsSbx(path: string): SettingsSbx {
@@ -44,5 +47,5 @@ export function loadSettingsSbx(path: string): SettingsSbx {
     throw new Error(`${path}: must declare a "hooks" key — nothing to merge otherwise`);
   }
 
-  return { path, hooks: obj['hooks'] };
+  return { path, values: obj };
 }
