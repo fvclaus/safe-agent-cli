@@ -26,6 +26,10 @@ MUST use **bun** for all package management and script execution. NEVER use npm,
   Thin public entrypoints.
 - [bin/safe-claude-code](bin/safe-claude-code), [bin/safe-codex](bin/safe-codex)
   Shell wrappers intended for PATH-based local installation.
+- [src/bin/git-sandboxed](src/bin/git-sandboxed) (symlinked at [bin/git-sandboxed](bin/git-sandboxed))
+  GITHUB_TOKEN-authenticated `git` wrapper for use inside the sandbox — lives in `src/bin` alongside the `bwrap`
+  shim so it rides the same PATH entry (see `buildSpawnEnv` in `src/adapters/claude-code.ts`); the `bin/` symlink
+  makes it reachable the same way outside the sandbox, e.g. for local testing.
 
 When refactoring, keep agent-specific logic out of the shared launcher whenever possible. Shared code should handle orchestration; adapters and integrations should own provider-specific behavior.
 
