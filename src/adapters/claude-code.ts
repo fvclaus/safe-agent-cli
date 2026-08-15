@@ -8,6 +8,7 @@ import type { AgentAdapter } from '../launcher/safe-agent-cli.js';
 import { mergeReadPaths, safeChainReadPaths } from '../safe-chain.js';
 import { loadUserSettings } from '../user-settings.js';
 import { expandHome, generateClaudeLocalMd } from '../claude-fragments.js';
+import { missingRtkWritePaths, rtkInitializationFailures } from '../rtk.js';
 
 const log = (msg: string) => process.stderr.write(msg + '\n');
 
@@ -210,55 +211,11 @@ function ensureUserSafeChainReadAccess(): void {
 
 // rtk (https://github.com/rtk-ai/rtk) rewrites Bash calls through a PreToolUse
 // hook to compress command output. When it's absent or half-installed, Claude
-// runs fine but burns tokens all session with nothing to flag it — so users who
-// opt in via the `checkRtk` user setting get a hard stop instead.
-const RTK_HOOK_COMMAND = 'rtk hook claude';
-
-/** True when Claude Code settings contain the PreToolUse hook `rtk init -g` installs. */
-export function hasRtkHook(settings: unknown): boolean {
-  if (typeof settings !== 'object' || settings === null) return false;
-  const hooks = (settings as Record<string, unknown>)['hooks'];
-  if (typeof hooks !== 'object' || hooks === null) return false;
-  const preToolUse = (hooks as Record<string, unknown>)['PreToolUse'];
-  if (!Array.isArray(preToolUse)) return false;
-  return preToolUse.some(entry => {
-    if (typeof entry !== 'object' || entry === null) return false;
-    const inner = (entry as Record<string, unknown>)['hooks'];
-    return Array.isArray(inner) && inner.some(h =>
-      typeof h === 'object' && h !== null &&
-      typeof (h as Record<string, unknown>)['command'] === 'string' &&
-      ((h as Record<string, unknown>)['command'] as string).trim() === RTK_HOOK_COMMAND,
-    );
-  });
-}
-
+// runs fine but burns tokens all session with nothing to flag it — so users
+// who opt in via the `checkRtk` user setting get a hard stop instead. See
+// ../rtk.ts for the checks themselves; this just reports their results.
 function verifyRtkInitialized(): void {
-  const failures: string[] = [];
-
-  const which = spawnSync('which', ['rtk'], { encoding: 'utf8' });
-  if (which.status !== 0) {
-    failures.push('the `rtk` binary is not on PATH');
-  }
-
-  // verifyClaudeSettingsJson ran before us, so if the file exists it parses.
-  const settingsPath = join(homedir(), '.claude', 'settings.json');
-  let hookInstalled = false;
-  if (existsSync(settingsPath)) {
-    try {
-      hookInstalled = hasRtkHook(JSON.parse(readFileSync(settingsPath, 'utf8')));
-    } catch { /* malformed — treated as hook missing */ }
-  }
-  if (!hookInstalled) {
-    failures.push(`no PreToolUse hook "${RTK_HOOK_COMMAND}" in ${settingsPath}`);
-  }
-
-  // RTK.md's existence is no longer checked here: when claudeFragmentsDir is
-  // also set, generateClaudeLocalMdOrExit reads and appends it itself, and
-  // fails the launch just as hard if it's missing. (If claudeFragmentsDir is
-  // NOT set, that fallback doesn't run — RTK.md's presence goes unchecked in
-  // that case, same as its content going unincluded without the old
-  // hand-maintained `@RTK.md` import in CLAUDE.md.)
-
+  const failures = rtkInitializationFailures();
   if (failures.length === 0) {
     log(chalk.bold.green('OK:') + ' rtk is initialized');
     return;
@@ -267,6 +224,21 @@ function verifyRtkInitialized(): void {
   for (const f of failures) log(`  - ${f}`);
   log('Fix with: rtk init -g   (see https://github.com/rtk-ai/rtk)');
   process.exit(1);
+}
+
+// Non-fatal: unlike verifyRtkInitialized, this never blocks the launch, only
+// warns, since rtk still mostly works (compression happens client-side)
+// without its own storage.
+function warnIfRtkWriteAccessMissing(): void {
+  const missing = missingRtkWritePaths();
+  if (missing.length === 0) return;
+
+  const settingsPath = join(homedir(), '.claude', 'settings.json');
+  log(
+    chalk.bold.yellow('WARNING:') +
+      ` checkRtk is enabled but ${settingsPath} is missing sandbox write access for: ${missing.join(', ')}`,
+  );
+  log(`  Add to sandbox.filesystem.allowWrite: ${JSON.stringify(missing)}`);
 }
 
 // A global ~/.claude/CLAUDE.md is easy to forget about once you've moved to
@@ -327,7 +299,10 @@ export const claudeCodeAdapter: AgentAdapter = {
   prepareLaunch: (context) => {
     verifyClaudeSettingsJson();
     const settings = loadUserSettings(log);
-    if (settings.checkRtk) verifyRtkInitialized();
+    if (settings.checkRtk) {
+      verifyRtkInitialized();
+      warnIfRtkWriteAccessMissing();
+    }
     warnIfGlobalClaudeMdExists();
     if (settings.claudeFragmentsDir) {
       generateClaudeLocalMdOrExit(settings.claudeFragmentsDir, settings.checkRtk, context.githubToken !== undefined);

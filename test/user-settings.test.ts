@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'bun:test';
 import { parseUserSettings, userSettingsPath } from '../src/user-settings.js';
-import { hasRtkHook } from '../src/adapters/claude-code.js';
+import { hasRtkHook } from '../src/rtk.js';
 
 describe('userSettingsPath', () => {
   test('defaults to ~/.config/safe-agent-cli/settings.json', () => {

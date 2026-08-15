@@ -83,7 +83,7 @@ export function safeChainReadPaths(
   return all.filter(p => !all.some(other => other !== p && isAncestor(other, p)));
 }
 
-function isAncestor(dir: string, child: string): boolean {
+export function isAncestor(dir: string, child: string): boolean {
   const base = dir.endsWith(sep) ? dir : dir + sep;
   return child.startsWith(base);
 }
