@@ -284,15 +284,29 @@ function warnIfGlobalClaudeMdExists(): void {
   }
 }
 
+// git-sandboxed is always bind-mounted onto PATH when --gh is enabled (see
+// src/bin/bwrap), independent of claudeFragmentsDir — but its usage
+// instructions only reach the agent via the built-in fragment merged into
+// CLAUDE.local.md, which requires claudeFragmentsDir to be configured at all.
+// Without it the tool is present but undiscoverable, so warn the human.
+function warnIfGithubEnabledWithoutFragments(): void {
+  log(
+    chalk.bold.yellow('WARNING:') +
+      ' --gh is enabled but claudeFragmentsDir is not configured — the agent has no way to learn ' +
+      'about git-sandboxed (a git wrapper that authenticates with GITHUB_TOKEN). Configure ' +
+      'claudeFragmentsDir in ~/.config/safe-agent-cli/settings.json to surface its usage instructions.',
+  );
+}
+
 // claudeFragmentsDir's mere presence is the on/off switch for generating
 // CLAUDE.local.md (see user-settings.ts) — no separate boolean. Any failure
 // (missing dir, malformed fragment, non-GitHub remote) aborts the launch,
 // same as verifyRtkInitialized: this feature never silently degrades.
-function generateClaudeLocalMdOrExit(fragmentsDir: string, checkRtk: boolean): void {
+function generateClaudeLocalMdOrExit(fragmentsDir: string, checkRtk: boolean, github: boolean): void {
   const dir = expandHome(fragmentsDir, homedir());
   const rtkMdPath = checkRtk ? join(homedir(), '.claude', 'RTK.md') : undefined;
   try {
-    const result = generateClaudeLocalMd(dir, process.cwd(), 'proxy', rtkMdPath);
+    const result = generateClaudeLocalMd(dir, process.cwd(), 'proxy', github, rtkMdPath);
     log(
       chalk.bold.green('OK:') +
         ` generated CLAUDE.local.md from ${result.matchedCount}/${result.totalCount} fragment(s) in ${dir}` +
@@ -310,12 +324,16 @@ export const claudeCodeAdapter: AgentAdapter = {
   executable: 'claude',
   forwardedArgsTarget: 'claude',
   launchLabel: 'Claude Code',
-  prepareLaunch: () => {
+  prepareLaunch: (context) => {
     verifyClaudeSettingsJson();
     const settings = loadUserSettings(log);
     if (settings.checkRtk) verifyRtkInitialized();
     warnIfGlobalClaudeMdExists();
-    if (settings.claudeFragmentsDir) generateClaudeLocalMdOrExit(settings.claudeFragmentsDir, settings.checkRtk);
+    if (settings.claudeFragmentsDir) {
+      generateClaudeLocalMdOrExit(settings.claudeFragmentsDir, settings.checkRtk, context.githubToken !== undefined);
+    } else if (context.githubToken !== undefined) {
+      warnIfGithubEnabledWithoutFragments();
+    }
     ensureClaudeStubDirs();
     ensureGitignoreStubs();
     ensureClaudeSandboxEnabled();
@@ -333,12 +351,18 @@ export const claudeCodeAdapter: AgentAdapter = {
     ...context.args.rest,
   ],
   // Put our bwrap shim (src/bin/bwrap) on PATH so it intercepts Claude Code's
-  // sandbox calls; REAL_BWRAP points it at the genuine bwrap.
+  // sandbox calls; REAL_BWRAP points it at the genuine bwrap. git-sandboxed
+  // lives in this same directory so it rides along on the same PATH entry —
+  // no separate wiring needed, and it survives Claude Code's shell-snapshot
+  // re-sourcing inside each sandboxed command (which clobbers any PATH set
+  // via bwrap args, but not this one, since it was already part of the
+  // snapshot's own captured PATH).
   buildSpawnEnv: () => {
     const realBwrap = spawnSync('which', ['bwrap'], { encoding: 'utf8' }).stdout.trim() || '/usr/bin/bwrap';
     const srcDir = fileURLToPath(new URL('../', import.meta.url));
     const binDir = join(srcDir, 'bin');
     chmodSync(join(binDir, 'bwrap'), 0o755);
+    chmodSync(join(binDir, 'git-sandboxed'), 0o755);
 
     return {
       PATH: `${binDir}:${process.env['PATH'] ?? ''}`,

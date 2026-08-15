@@ -14,6 +14,16 @@
  *   3. Inject the missing gitdir binds when the project is a git worktree.
  *   4. Honor `sandbox.filesystem.allowWrite` from the Claude settings files,
  *      overriding the harness's hardcoded .claude/.git/dotfile deny wall.
+ *
+ * git-sandboxed (a built-in helper the agent can call) needs no wiring here:
+ * it lives directly in this same directory, which is already on PATH and
+ * already bind-mounted (this whole repo is) — see buildSpawnEnv in
+ * src/adapters/claude-code.ts. An earlier version of this file bind-mounted
+ * a separate tools/ directory and injected a --setenv PATH for it, but
+ * Claude Code re-sources a frozen shell-snapshot PATH inside every sandboxed
+ * command, which clobbers any PATH bwrap itself is told to set — so that
+ * approach never actually worked. Living inside the already-on-PATH src/bin
+ * sidesteps the problem entirely.
  */
 import { spawnSync } from 'node:child_process';
 import { appendFileSync, existsSync, readFileSync, statSync } from 'node:fs';

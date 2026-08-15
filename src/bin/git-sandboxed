@@ -1,0 +1,48 @@
+#!/usr/bin/env bun
+/**
+ * Transparent `git` wrapper that rewrites GitHub remote URLs to use
+ * GITHUB_TOKEN, so pushes/fetches/clones against github.com work without
+ * writing credentials into .git/config (which the sandbox may block anyway).
+ * Lives alongside the bwrap shim in this same directory so it rides the same
+ * PATH entry (see buildSpawnEnv in src/adapters/claude-code.ts) — errors out
+ * below if GITHUB_TOKEN isn't actually set, rather than needing to be
+ * conditionally exposed only when --gh is enabled.
+ *
+ * Everything after the command name is forwarded to the real `git`
+ * unchanged, except `-u`/`--set-upstream`, which is rejected: it writes
+ * upstream-tracking entries to .git/config, which the sandbox blocks, so the
+ * push succeeds but a harmless-looking config-write error follows it. Reject
+ * up front instead of letting that error surface.
+ */
+import { spawnSync } from 'node:child_process';
+
+const args = process.argv.slice(2);
+
+if (args.some((a) => a === '-u' || a === '--set-upstream')) {
+  console.error(
+    'git-sandboxed: -u/--set-upstream is not supported — it writes upstream-tracking ' +
+    'entries to .git/config, which this sandbox blocks. Omit -u and retry.',
+  );
+  process.exit(1);
+}
+
+const token = process.env['GITHUB_TOKEN'];
+if (!token) {
+  console.error('git-sandboxed: GITHUB_TOKEN is not set — this requires --gh/--github to be enabled.');
+  process.exit(1);
+}
+
+const result = spawnSync(
+  'git',
+  ['-c', `url.https://${token}@github.com/.insteadOf=git@github.com:`, ...args],
+  { stdio: 'inherit' },
+);
+
+if (result.error) {
+  console.error(result.error);
+  process.exit(127);
+}
+if (result.signal) {
+  process.kill(process.pid, result.signal);
+}
+process.exit(result.status ?? 0);

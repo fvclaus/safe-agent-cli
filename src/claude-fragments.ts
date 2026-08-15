@@ -1,15 +1,22 @@
 import { existsSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
 import { basename, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { load as loadYaml } from 'js-yaml';
 import { getOriginUrl, parseGithubOwner } from './git-remote.js';
 
+// Fragments safe-agent-cli ships itself (e.g. how to use git-sandboxed),
+// matched and rendered the same way as the user's own fragmentsDir but always
+// appended last, after the user's own — see generateClaudeLocalMd.
+const BUILTIN_FRAGMENTS_DIR = fileURLToPath(new URL('./fragments', import.meta.url));
+
 // CLAUDE.local.md is generated from a personal library of markdown fragments,
-// each optionally scoped to a repo org and/or isolation mode via YAML
-// frontmatter. See the design discussion this implements: matching is AND
-// across frontmatter keys, OR within a key's list, a missing key is a
-// wildcard for that dimension, and no frontmatter at all means "always
-// included". Any malformed fragment aborts generation — this feature never
-// silently degrades, matching the rest of this tool's settings handling.
+// each optionally scoped to a repo org, isolation mode, and/or whether
+// --gh/--github is enabled, via YAML frontmatter. See the design discussion
+// this implements: matching is AND across frontmatter keys, OR within a
+// key's list, a missing key is a wildcard for that dimension, and no
+// frontmatter at all means "always included". Any malformed fragment aborts
+// generation — this feature never silently degrades, matching the rest of
+// this tool's settings handling.
 
 export type Isolation = 'proxy' | 'sbx';
 
@@ -18,6 +25,8 @@ export interface Fragment {
   path: string;
   org?: string[];
   isolation?: string[];
+  /** Whether `--gh`/`--github` must be enabled (true) or disabled (false) for this fragment to match. Absent = wildcard. */
+  github?: boolean;
   body: string;
 }
 
@@ -25,15 +34,22 @@ export interface MatchContext {
   /** Lowercased repo owner, or undefined when there's no org to match (e.g. no git remote). */
   org: string | undefined;
   isolation: Isolation;
+  /** Whether `--gh`/`--github` is enabled for this launch. */
+  github: boolean;
 }
 
 const FRONTMATTER_RE = /^---\r?\n([\s\S]*?)\r?\n---\r?\n?([\s\S]*)$/;
-const KNOWN_FRONTMATTER_KEYS = new Set(['org', 'isolation']);
+const KNOWN_FRONTMATTER_KEYS = new Set(['org', 'isolation', 'github']);
 
 function toStringList(value: unknown, key: string, path: string): string[] {
   if (typeof value === 'string') return [value];
   if (Array.isArray(value) && value.every(v => typeof v === 'string')) return value as string[];
   throw new Error(`${path}: "${key}" must be a string or an array of strings, got ${JSON.stringify(value)}`);
+}
+
+function toBoolean(value: unknown, key: string, path: string): boolean {
+  if (typeof value === 'boolean') return value;
+  throw new Error(`${path}: "${key}" must be a boolean, got ${JSON.stringify(value)}`);
 }
 
 /** Parses a fragment's optional YAML frontmatter and body. Throws on any malformed frontmatter. */
@@ -59,7 +75,7 @@ export function parseFragment(content: string, path: string): Fragment {
   const obj = raw as Record<string, unknown>;
   for (const key of Object.keys(obj)) {
     if (!KNOWN_FRONTMATTER_KEYS.has(key)) {
-      throw new Error(`${path}: unrecognized frontmatter key "${key}" (known keys: org, isolation)`);
+      throw new Error(`${path}: unrecognized frontmatter key "${key}" (known keys: org, isolation, github)`);
     }
   }
 
@@ -67,8 +83,9 @@ export function parseFragment(content: string, path: string): Fragment {
   // the key only when the frontmatter actually set it.
   const org = 'org' in obj ? { org: toStringList(obj['org'], 'org', path) } : {};
   const isolation = 'isolation' in obj ? { isolation: toStringList(obj['isolation'], 'isolation', path) } : {};
+  const github = 'github' in obj ? { github: toBoolean(obj['github'], 'github', path) } : {};
 
-  return { path, ...org, ...isolation, body };
+  return { path, ...org, ...isolation, ...github, body };
 }
 
 function matchesList(list: string[] | undefined, value: string | undefined, caseInsensitive: boolean): boolean {
@@ -82,7 +99,8 @@ function matchesList(list: string[] | undefined, value: string | undefined, case
 export function fragmentMatches(fragment: Fragment, context: MatchContext): boolean {
   return (
     matchesList(fragment.org, context.org, true) &&
-    matchesList(fragment.isolation, context.isolation, false)
+    matchesList(fragment.isolation, context.isolation, false) &&
+    (fragment.github === undefined || fragment.github === context.github)
   );
 }
 
@@ -135,19 +153,23 @@ export interface GenerateResult {
 
 /**
  * Reads every `*.md` fragment in `fragmentsDir`, keeps the ones whose
- * frontmatter matches the current repo/isolation context, and writes the
- * concatenated result to `CLAUDE.local.md` in `repoRoot`. Fragments are
- * ordered alphabetically by filename. When `rtkMdPath` is given, its content
- * is read and appended last, unconditionally, exactly like a fragment with no
- * frontmatter — this is how `checkRtk` users get RTK.md into context now,
- * instead of a hand-maintained `@RTK.md` import in CLAUDE.md. Throws on any
- * failure (missing fragments directory, malformed fragment, unsupported git
- * remote, missing rtkMdPath) — the caller is expected to treat that as fatal.
+ * frontmatter matches the current repo/isolation/github context, and writes
+ * the concatenated result to `CLAUDE.local.md` in `repoRoot`. Fragments are
+ * ordered alphabetically by filename. safe-agent-cli's own built-in fragments
+ * (BUILTIN_FRAGMENTS_DIR, e.g. how to use git-sandboxed) go through the same
+ * matching, appended after the user's own fragments. When `rtkMdPath` is
+ * given, its content is read and appended last of all, unconditionally,
+ * exactly like a fragment with no frontmatter — this is how `checkRtk` users
+ * get RTK.md into context now, instead of a hand-maintained `@RTK.md` import
+ * in CLAUDE.md. Throws on any failure (missing fragments directory, malformed
+ * fragment, unsupported git remote, missing rtkMdPath) — the caller is
+ * expected to treat that as fatal.
  */
 export function generateClaudeLocalMd(
   fragmentsDir: string,
   repoRoot: string,
   isolation: Isolation = 'proxy',
+  github = false,
   rtkMdPath?: string,
 ): GenerateResult {
   if (!existsSync(fragmentsDir)) {
@@ -162,14 +184,18 @@ export function generateClaudeLocalMd(
   }
   const org = ownerResult.kind === 'github' ? ownerResult.owner : undefined;
 
-  const filenames = readdirSync(fragmentsDir).filter(f => f.endsWith('.md')).sort();
-  const fragments = filenames.map(f => {
-    const path = join(fragmentsDir, f);
-    return parseFragment(readFileSync(path, 'utf8'), path);
-  });
+  const readFragmentsDir = (dir: string) =>
+    readdirSync(dir).filter(f => f.endsWith('.md')).sort().map(f => {
+      const path = join(dir, f);
+      return parseFragment(readFileSync(path, 'utf8'), path);
+    });
 
-  const matched = fragments.filter(f => fragmentMatches(f, { org, isolation }));
-  const sections = matched.map(renderFragment);
+  const fragments = readFragmentsDir(fragmentsDir);
+  const builtinFragments = readFragmentsDir(BUILTIN_FRAGMENTS_DIR);
+
+  const matched = fragments.filter(f => fragmentMatches(f, { org, isolation, github }));
+  const matchedBuiltin = builtinFragments.filter(f => fragmentMatches(f, { org, isolation, github }));
+  const sections = [...matched, ...matchedBuiltin].map(renderFragment);
 
   const rtkAppended = rtkMdPath !== undefined;
   if (rtkMdPath !== undefined) {
@@ -183,5 +209,10 @@ export function generateClaudeLocalMd(
   const outputPath = join(repoRoot, 'CLAUDE.local.md');
   writeFileSync(outputPath, content, 'utf8');
 
-  return { outputPath, matchedCount: matched.length, totalCount: fragments.length, rtkAppended };
+  return {
+    outputPath,
+    matchedCount: matched.length + matchedBuiltin.length,
+    totalCount: fragments.length + builtinFragments.length,
+    rtkAppended,
+  };
 }

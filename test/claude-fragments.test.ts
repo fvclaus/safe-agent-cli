@@ -28,6 +28,16 @@ describe('parseFragment', () => {
     expect(f.org).toEqual(['acme']);
   });
 
+  test('parses github as a boolean', () => {
+    expect(parseFragment('---\ngithub: true\n---\nbody\n', '/f/a.md').github).toBe(true);
+    expect(parseFragment('---\ngithub: false\n---\nbody\n', '/f/a.md').github).toBe(false);
+  });
+
+  test('a non-boolean github value throws', () => {
+    expect(() => parseFragment('---\ngithub: yes\n---\nbody\n', '/f/a.md'))
+      .toThrow(/"github" must be a boolean/);
+  });
+
   test('empty frontmatter yields an unconditioned fragment', () => {
     const f = parseFragment('---\n---\nbody\n', '/f/a.md');
     expect(f.org).toBeUndefined();
@@ -64,31 +74,43 @@ describe('fragmentMatches', () => {
   const base = { path: '/f/a.md', body: '' };
 
   test('no conditions always matches', () => {
-    expect(fragmentMatches(base, { org: 'acme', isolation: 'proxy' })).toBe(true);
-    expect(fragmentMatches(base, { org: undefined, isolation: 'sbx' })).toBe(true);
+    expect(fragmentMatches(base, { org: 'acme', isolation: 'proxy', github: true })).toBe(true);
+    expect(fragmentMatches(base, { org: undefined, isolation: 'sbx', github: false })).toBe(true);
   });
 
   test('org match is case-insensitive', () => {
     const f = { ...base, org: ['Developer-Akademie-GmbH'] };
-    expect(fragmentMatches(f, { org: 'developer-akademie-gmbh', isolation: 'proxy' })).toBe(true);
+    expect(fragmentMatches(f, { org: 'developer-akademie-gmbh', isolation: 'proxy', github: false })).toBe(true);
   });
 
   test('org list is OR', () => {
     const f = { ...base, org: ['a', 'b'] };
-    expect(fragmentMatches(f, { org: 'b', isolation: 'proxy' })).toBe(true);
-    expect(fragmentMatches(f, { org: 'c', isolation: 'proxy' })).toBe(false);
+    expect(fragmentMatches(f, { org: 'b', isolation: 'proxy', github: false })).toBe(true);
+    expect(fragmentMatches(f, { org: 'c', isolation: 'proxy', github: false })).toBe(false);
   });
 
   test('an org condition never matches when there is no org to compare (no remote)', () => {
     const f = { ...base, org: ['acme'] };
-    expect(fragmentMatches(f, { org: undefined, isolation: 'proxy' })).toBe(false);
+    expect(fragmentMatches(f, { org: undefined, isolation: 'proxy', github: false })).toBe(false);
   });
 
   test('multiple keys are ANDed', () => {
     const f = { ...base, org: ['acme'], isolation: ['sbx'] };
-    expect(fragmentMatches(f, { org: 'acme', isolation: 'sbx' })).toBe(true);
-    expect(fragmentMatches(f, { org: 'acme', isolation: 'proxy' })).toBe(false);
-    expect(fragmentMatches(f, { org: 'other', isolation: 'sbx' })).toBe(false);
+    expect(fragmentMatches(f, { org: 'acme', isolation: 'sbx', github: false })).toBe(true);
+    expect(fragmentMatches(f, { org: 'acme', isolation: 'proxy', github: false })).toBe(false);
+    expect(fragmentMatches(f, { org: 'other', isolation: 'sbx', github: false })).toBe(false);
+  });
+
+  test('github: true only matches when github is enabled', () => {
+    const f = { ...base, github: true };
+    expect(fragmentMatches(f, { org: undefined, isolation: 'proxy', github: true })).toBe(true);
+    expect(fragmentMatches(f, { org: undefined, isolation: 'proxy', github: false })).toBe(false);
+  });
+
+  test('github: false only matches when github is disabled', () => {
+    const f = { ...base, github: false };
+    expect(fragmentMatches(f, { org: undefined, isolation: 'proxy', github: false })).toBe(true);
+    expect(fragmentMatches(f, { org: undefined, isolation: 'proxy', github: true })).toBe(false);
   });
 });
 
@@ -118,7 +140,10 @@ describe('generateClaudeLocalMd', () => {
       writeFileSync(join(fragmentsDir, 'z-not-md.txt'), 'ignored\n');
 
       const result = generateClaudeLocalMd(fragmentsDir, repoRoot, 'proxy');
-      expect(result.totalCount).toBe(2);
+      // +1 built-in fragment shipped in src/fragments (github: true, doesn't
+      // match here since github defaults to false) counted in totalCount but
+      // not matchedCount — see the 'built-in fragments' describe block below.
+      expect(result.totalCount).toBe(3);
       expect(result.matchedCount).toBe(1);
       expect(result.rtkAppended).toBe(false);
 
@@ -132,6 +157,23 @@ describe('generateClaudeLocalMd', () => {
       expect(content).toContain('fragment: b-universal.md');
       expect(content).not.toContain(join(fragmentsDir, 'b-universal.md'));
       expect(content).not.toContain('sbx rule');
+    });
+  });
+
+  test('the built-in git-sandboxed fragment only appears (last) when github is enabled', () => {
+    withTempDirs((fragmentsDir, repoRoot) => {
+      writeFileSync(join(fragmentsDir, 'a-user.md'), 'user rule\n');
+
+      const withoutGithub = generateClaudeLocalMd(fragmentsDir, repoRoot, 'proxy', false);
+      const contentWithout = readFileSync(join(repoRoot, 'CLAUDE.local.md'), 'utf8');
+      expect(contentWithout).not.toContain('git-sandboxed');
+      expect(withoutGithub.matchedCount).toBe(1);
+
+      const withGithub = generateClaudeLocalMd(fragmentsDir, repoRoot, 'proxy', true);
+      const contentWithGithub = readFileSync(join(repoRoot, 'CLAUDE.local.md'), 'utf8');
+      expect(contentWithGithub).toContain('git-sandboxed');
+      expect(withGithub.matchedCount).toBe(2);
+      expect(contentWithGithub.indexOf('user rule')).toBeLessThan(contentWithGithub.indexOf('git-sandboxed'));
     });
   });
 
@@ -150,7 +192,7 @@ describe('generateClaudeLocalMd', () => {
       const rtkMdPath = join(repoRoot, 'RTK.md');
       writeFileSync(rtkMdPath, 'rtk rule\n');
 
-      const result = generateClaudeLocalMd(fragmentsDir, repoRoot, 'proxy', rtkMdPath);
+      const result = generateClaudeLocalMd(fragmentsDir, repoRoot, 'proxy', false, rtkMdPath);
       expect(result.rtkAppended).toBe(true);
       expect(result.matchedCount).toBe(1); // rtkMdPath isn't counted as a fragment
 
@@ -167,7 +209,7 @@ describe('generateClaudeLocalMd', () => {
     withTempDirs((fragmentsDir, repoRoot) => {
       writeFileSync(join(fragmentsDir, 'a.md'), 'fragment rule\n');
 
-      expect(() => generateClaudeLocalMd(fragmentsDir, repoRoot, 'proxy', join(repoRoot, 'RTK.md')))
+      expect(() => generateClaudeLocalMd(fragmentsDir, repoRoot, 'proxy', false, join(repoRoot, 'RTK.md')))
         .toThrow(/checkRtk is enabled but .*RTK\.md does not exist/);
     });
   });
