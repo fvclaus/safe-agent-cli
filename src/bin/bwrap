@@ -26,8 +26,9 @@
  * sidesteps the problem entirely.
  */
 import { spawnSync } from 'node:child_process';
-import { appendFileSync, existsSync, readFileSync, statSync } from 'node:fs';
+import { appendFileSync, existsSync, readFileSync, realpathSync, statSync } from 'node:fs';
 import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import {
   appendWritableRebinds,
   discoverProjectRoot,
@@ -43,6 +44,26 @@ const REAL_BWRAP = process.env['REAL_BWRAP'] || '/usr/bin/bwrap';
 const DEBUG = Boolean(process.env['BWRAP_WRAPPER_DEBUG']);
 const LOG = '/tmp/bwrap-wrapper.log';
 const HOME = process.env['HOME'] ?? '';
+
+// A misdetected REAL_BWRAP pointing back at this very script (e.g. a caller finding
+// "bwrap" on PATH via a naive `which bwrap` when this shim's own directory is already
+// ahead of the real binary — see src/real-bwrap.ts) would otherwise exec into itself:
+// each recursive pass re-applies the transforms below and appends more args on top of
+// the last pass's already-transformed list, growing without bound until it exhausts
+// memory or hits the OS argv-length limit. Fail loudly instead of recursing.
+try {
+  if (realpathSync(REAL_BWRAP) === fileURLToPath(new URL(import.meta.url))) {
+    console.error(
+      `bwrap shim: REAL_BWRAP ("${REAL_BWRAP}") resolves to this same shim script — ` +
+      'refusing to exec into itself (this would recurse and grow its argument list ' +
+      'without bound). This means whatever set REAL_BWRAP found this shim on PATH ' +
+      'instead of the genuine bubblewrap binary — see src/real-bwrap.ts.',
+    );
+    process.exit(1);
+  }
+} catch {
+  // REAL_BWRAP not resolvable (e.g. missing) — let the real spawnSync below report it.
+}
 
 function debugLog(line: string): void {
   if (!DEBUG) return;

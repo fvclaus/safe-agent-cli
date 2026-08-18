@@ -32,6 +32,20 @@ if (!token) {
   process.exit(1);
 }
 
+// Real GitHub PATs always have one of these prefixes. Claude Code's own sandbox can mask
+// GITHUB_TOKEN independently of anything this repo controls, replacing it with a sentinel
+// value at runtime — which won't match either prefix. This is a diagnostic only: a token
+// shape we didn't anticipate shouldn't block an operation that might otherwise work, so
+// warn and continue regardless rather than exit.
+const VALID_TOKEN_PREFIXES = ['ghp_', 'github_pat_'];
+if (!VALID_TOKEN_PREFIXES.some((prefix) => token.startsWith(prefix))) {
+  console.error(
+    `git-sandboxed: WARNING: GITHUB_TOKEN doesn't look like a valid GitHub token ` +
+    `(starts with '${token.slice(0, 10)}…', length ${token.length}) — it may be masked by the sandbox ` +
+    `and this operation could fail to authenticate.`,
+  );
+}
+
 const result = spawnSync(
   'git',
   ['-c', `url.https://${token}@github.com/.insteadOf=git@github.com:`, ...args],

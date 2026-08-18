@@ -3,6 +3,16 @@
  * Test harness: mirrors the shared launcher setup (GCP/GitHub env setup + bwrap
  * sandbox) but runs an arbitrary command instead of launching an agent CLI.
  *
+ * Running this nested inside a session safe-agent-cli itself launched can make
+ * `which bwrap` find this repo's own shim (already ahead on PATH) instead of the
+ * real binary. src/real-bwrap.ts guards against that (skips any `which` match that
+ * resolves to the shim), and src/bin/bwrap independently refuses to exec into
+ * itself if REAL_BWRAP ever does end up pointing at it anyway — both would
+ * otherwise recurse into themselves, growing their argument list without bound
+ * until memory is exhausted. Still NEVER add this (or any `bwrap`-invoking
+ * command) to a Claude Code `excludedCommands` entry — that runs it unsandboxed,
+ * which is a separate, still-real risk independent of the above.
+ *
  * Usage:
  *   bun scripts/test-sandbox.ts [--gcp [--project ID]] [--gh[=PAT_NAME]] <command>
  *   bun scripts/test-sandbox.ts bash          # interactive shell in the sandbox
@@ -39,6 +49,7 @@ import { join, resolve, basename } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawnSync } from 'node:child_process';
 import { $ } from 'zx';
+import { resolveRealBwrap } from '../src/real-bwrap.js';
 
 $.verbose = false;
 
@@ -48,7 +59,7 @@ const log = (msg: string) => process.stderr.write(msg + '\n');
 const cwd  = process.cwd();
 const home = process.env['HOME'] ?? '/home/' + process.env['USER'];
 const binDir = join(fileURLToPath(new URL('../src/', import.meta.url)), 'bin');
-const realBwrap = spawnSync('which', ['bwrap'], { encoding: 'utf8' }).stdout.trim() || '/usr/bin/bwrap';
+const realBwrap = resolveRealBwrap();
 
 // ── CLI args ──────────────────────────────────────────────────────────────────
 // Flags mirror src/launcher/safe-agent-cli.tsx; everything not recognized is the command.

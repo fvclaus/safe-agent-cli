@@ -10,13 +10,13 @@ import { getOriginUrl, parseGithubOwner } from './git-remote.js';
 const BUILTIN_FRAGMENTS_DIR = fileURLToPath(new URL('./fragments', import.meta.url));
 
 // CLAUDE.local.md is generated from a personal library of markdown fragments,
-// each optionally scoped to a repo org, isolation mode, and/or whether
-// --gh/--github is enabled, via YAML frontmatter. See the design discussion
-// this implements: matching is AND across frontmatter keys, OR within a
-// key's list, a missing key is a wildcard for that dimension, and no
-// frontmatter at all means "always included". Any malformed fragment aborts
-// generation — this feature never silently degrades, matching the rest of
-// this tool's settings handling.
+// each optionally scoped to a repo org, isolation mode, whether --gh/--github
+// is enabled, and/or whether GITHUB_TOKEN ends up masked by Claude Code's own
+// sandbox, via YAML frontmatter. See the design discussion this implements:
+// matching is AND across frontmatter keys, OR within a key's list, a missing
+// key is a wildcard for that dimension, and no frontmatter at all means
+// "always included". Any malformed fragment aborts generation — this feature
+// never silently degrades, matching the rest of this tool's settings handling.
 
 export type Isolation = 'proxy' | 'sbx';
 
@@ -27,6 +27,12 @@ export interface Fragment {
   isolation?: string[];
   /** Whether `--gh`/`--github` must be enabled (true) or disabled (false) for this fragment to match. Absent = wildcard. */
   github?: boolean;
+  /**
+   * Whether GITHUB_TOKEN must be masked by Claude Code's own sandbox (true) or not (false)
+   * for this fragment to match. Absent = wildcard. Only meaningful alongside `github: true`
+   * — masking is irrelevant when github integration isn't enabled at all.
+   */
+  githubMasked?: boolean;
   body: string;
 }
 
@@ -36,10 +42,12 @@ export interface MatchContext {
   isolation: Isolation;
   /** Whether `--gh`/`--github` is enabled for this launch. */
   github: boolean;
+  /** Whether GITHUB_TOKEN is masked by Claude Code's own sandbox for this launch. */
+  githubMasked: boolean;
 }
 
 const FRONTMATTER_RE = /^---\r?\n([\s\S]*?)\r?\n---\r?\n?([\s\S]*)$/;
-const KNOWN_FRONTMATTER_KEYS = new Set(['org', 'isolation', 'github']);
+const KNOWN_FRONTMATTER_KEYS = new Set(['org', 'isolation', 'github', 'githubMasked']);
 
 function toStringList(value: unknown, key: string, path: string): string[] {
   if (typeof value === 'string') return [value];
@@ -75,7 +83,7 @@ export function parseFragment(content: string, path: string): Fragment {
   const obj = raw as Record<string, unknown>;
   for (const key of Object.keys(obj)) {
     if (!KNOWN_FRONTMATTER_KEYS.has(key)) {
-      throw new Error(`${path}: unrecognized frontmatter key "${key}" (known keys: org, isolation, github)`);
+      throw new Error(`${path}: unrecognized frontmatter key "${key}" (known keys: org, isolation, github, githubMasked)`);
     }
   }
 
@@ -84,8 +92,9 @@ export function parseFragment(content: string, path: string): Fragment {
   const org = 'org' in obj ? { org: toStringList(obj['org'], 'org', path) } : {};
   const isolation = 'isolation' in obj ? { isolation: toStringList(obj['isolation'], 'isolation', path) } : {};
   const github = 'github' in obj ? { github: toBoolean(obj['github'], 'github', path) } : {};
+  const githubMasked = 'githubMasked' in obj ? { githubMasked: toBoolean(obj['githubMasked'], 'githubMasked', path) } : {};
 
-  return { path, ...org, ...isolation, ...github, body };
+  return { path, ...org, ...isolation, ...github, ...githubMasked, body };
 }
 
 function matchesList(list: string[] | undefined, value: string | undefined, caseInsensitive: boolean): boolean {
@@ -100,7 +109,8 @@ export function fragmentMatches(fragment: Fragment, context: MatchContext): bool
   return (
     matchesList(fragment.org, context.org, true) &&
     matchesList(fragment.isolation, context.isolation, false) &&
-    (fragment.github === undefined || fragment.github === context.github)
+    (fragment.github === undefined || fragment.github === context.github) &&
+    (fragment.githubMasked === undefined || fragment.githubMasked === context.githubMasked)
   );
 }
 
@@ -170,6 +180,7 @@ export function generateClaudeLocalMd(
   repoRoot: string,
   isolation: Isolation = 'proxy',
   github = false,
+  githubMasked = false,
   rtkMdPath?: string,
 ): GenerateResult {
   if (!existsSync(fragmentsDir)) {
@@ -193,8 +204,8 @@ export function generateClaudeLocalMd(
   const fragments = readFragmentsDir(fragmentsDir);
   const builtinFragments = readFragmentsDir(BUILTIN_FRAGMENTS_DIR);
 
-  const matched = fragments.filter(f => fragmentMatches(f, { org, isolation, github }));
-  const matchedBuiltin = builtinFragments.filter(f => fragmentMatches(f, { org, isolation, github }));
+  const matched = fragments.filter(f => fragmentMatches(f, { org, isolation, github, githubMasked }));
+  const matchedBuiltin = builtinFragments.filter(f => fragmentMatches(f, { org, isolation, github, githubMasked }));
   const sections = [...matched, ...matchedBuiltin].map(renderFragment);
 
   const rtkAppended = rtkMdPath !== undefined;

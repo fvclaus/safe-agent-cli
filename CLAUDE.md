@@ -98,6 +98,8 @@ If you touch sandbox behavior, run the harness as well.
 
 The harness in [scripts/test-sandbox.ts](scripts/test-sandbox.ts) mirrors the shared launcher setup (GCP/GitHub env setup plus `bwrap` sandboxing) but runs an arbitrary command instead of launching Claude or Codex.
 
+Running this nested inside a session safe-agent-cli itself launched can make `which bwrap` find this repo's own shim (already ahead on PATH) instead of the real binary, pointing `REAL_BWRAP` at the shim itself. `src/real-bwrap.ts` guards against that, and `src/bin/bwrap` independently refuses to exec into itself if `REAL_BWRAP` ever does resolve to it anyway — both would otherwise recurse into themselves, growing their argument list without bound until memory is exhausted and the host crashes. Still **never** add this (or any `bwrap`-invoking command) to a Claude Code `excludedCommands` entry — that runs it unsandboxed, a separate, still-real risk independent of the above.
+
 Examples:
 
 ```bash

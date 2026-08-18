@@ -3,12 +3,12 @@ import { chmodSync, existsSync, lstatSync, mkdirSync, readFileSync, rmSync, writ
 import { join } from 'node:path';
 import { homedir } from 'node:os';
 import { fileURLToPath } from 'node:url';
-import { spawnSync } from 'node:child_process';
 import type { AgentAdapter } from '../launcher/safe-agent-cli.js';
 import { mergeReadPaths, safeChainReadPaths } from '../safe-chain.js';
 import { loadUserSettings } from '../user-settings.js';
 import { expandHome, generateClaudeLocalMd } from '../claude-fragments.js';
 import { missingRtkWritePaths, rtkInitializationFailures } from '../rtk.js';
+import { resolveRealBwrap } from '../real-bwrap.js';
 
 const log = (msg: string) => process.stderr.write(msg + '\n');
 
@@ -256,6 +256,61 @@ function warnIfGlobalClaudeMdExists(): void {
   }
 }
 
+interface SandboxSettingsFile {
+  sandbox?: {
+    credentials?: { envVars?: Array<{ name?: string; mode?: string }> };
+    excludedCommands?: string[];
+  };
+}
+
+// Same 3 files, same union-across-all approach as the bwrap shim's allowWrite/denyWrite
+// merge (src/bin/bwrap) — this matches Claude Code's actual settings merge model.
+// verifyClaudeSettingsJson already validated these files' JSON earlier in prepareLaunch,
+// so parse failures here are unexpected; skip the file defensively rather than crash the
+// launcher over it.
+function readSandboxSettingsFiles(): SandboxSettingsFile[] {
+  const paths = [
+    join(homedir(), '.claude', 'settings.json'),
+    join(process.cwd(), '.claude', 'settings.json'),
+    join(process.cwd(), '.claude', 'settings.local.json'),
+  ];
+  const files: SandboxSettingsFile[] = [];
+  for (const p of paths) {
+    if (!existsSync(p)) continue;
+    try {
+      files.push(JSON.parse(readFileSync(p, 'utf8')) as SandboxSettingsFile);
+    } catch {
+      continue;
+    }
+  }
+  return files;
+}
+
+// Claude Code's own sandbox can mask GITHUB_TOKEN (sandbox.credentials.envVars,
+// mode: "mask"), independent of anything this repo controls — see git-sandboxed's own
+// runtime prefix check for the matching runtime-side signal. Reading the declared
+// config here lets the launcher fail fast, before the agent starts, instead of every
+// git-sandboxed push silently failing to authenticate later.
+function isGithubTokenMasked(): boolean {
+  return readSandboxSettingsFiles().some(f =>
+    (f.sandbox?.credentials?.envVars ?? []).some(v => v.name === 'GITHUB_TOKEN' && v.mode === 'mask'),
+  );
+}
+
+// A bare 'git *' entry is confirmed unreliable — Claude Code's excludedCommands
+// matcher treats the literal token `git` specially/racily, so the same 'git *' entry
+// sometimes runs the command sandboxed anyway (see git-push-sandbox-debugging-transcript.md).
+// Only an absolute-path git exclusion (e.g. '/usr/bin/git *' on Linux,
+// '/opt/homebrew/bin/git *' on macOS) was reliable in testing. The exact path is
+// machine-specific, so match the shape rather than one literal string.
+const ABSOLUTE_GIT_EXCLUDED_COMMAND_RE = /^\S+\/git \*$/;
+
+function hasGitExcludedCommand(): boolean {
+  return readSandboxSettingsFiles().some(f =>
+    (f.sandbox?.excludedCommands ?? []).some(c => ABSOLUTE_GIT_EXCLUDED_COMMAND_RE.test(c)),
+  );
+}
+
 // git-sandboxed is always bind-mounted onto PATH when --gh is enabled (see
 // src/bin/bwrap), independent of claudeFragmentsDir — but its usage
 // instructions only reach the agent via the built-in fragment merged into
@@ -274,11 +329,16 @@ function warnIfGithubEnabledWithoutFragments(): void {
 // CLAUDE.local.md (see user-settings.ts) — no separate boolean. Any failure
 // (missing dir, malformed fragment, non-GitHub remote) aborts the launch,
 // same as verifyRtkInitialized: this feature never silently degrades.
-function generateClaudeLocalMdOrExit(fragmentsDir: string, checkRtk: boolean, github: boolean): void {
+function generateClaudeLocalMdOrExit(
+  fragmentsDir: string,
+  checkRtk: boolean,
+  github: boolean,
+  githubMasked = false,
+): void {
   const dir = expandHome(fragmentsDir, homedir());
   const rtkMdPath = checkRtk ? join(homedir(), '.claude', 'RTK.md') : undefined;
   try {
-    const result = generateClaudeLocalMd(dir, process.cwd(), 'proxy', github, rtkMdPath);
+    const result = generateClaudeLocalMd(dir, process.cwd(), 'proxy', github, githubMasked, rtkMdPath);
     log(
       chalk.bold.green('OK:') +
         ` generated CLAUDE.local.md from ${result.matchedCount}/${result.totalCount} fragment(s) in ${dir}` +
@@ -304,10 +364,28 @@ export const claudeCodeAdapter: AgentAdapter = {
       warnIfRtkWriteAccessMissing();
     }
     warnIfGlobalClaudeMdExists();
-    if (settings.claudeFragmentsDir) {
-      generateClaudeLocalMdOrExit(settings.claudeFragmentsDir, settings.checkRtk, context.githubToken !== undefined);
-    } else if (context.githubToken !== undefined) {
-      warnIfGithubEnabledWithoutFragments();
+    if (context.githubToken !== undefined) {
+      const githubTokenMasked = isGithubTokenMasked();
+      if (githubTokenMasked && !hasGitExcludedCommand()) {
+        log(
+          chalk.bold.red('ERROR:') +
+            ' GITHUB_TOKEN is masked in this sandbox (sandbox.credentials.envVars), and no absolute-path ' +
+            "git exclusion (e.g. '/usr/bin/git *') is in excludedCommands — the agent would have no " +
+            "working fallback for push, fetch, clone, or pull. A bare 'git *' entry is not enough — " +
+            "Claude Code's excludedCommands matcher treats the literal token `git` unreliably, so that " +
+            'entry sometimes runs the command sandboxed anyway. Add an absolute-path git exclusion (find ' +
+            'yours with `command -v git`) to excludedCommands in one of your settings.json files, or ' +
+            'remove the GITHUB_TOKEN mask entry.',
+        );
+        process.exit(1);
+      }
+      if (settings.claudeFragmentsDir) {
+        generateClaudeLocalMdOrExit(settings.claudeFragmentsDir, settings.checkRtk, true, githubTokenMasked);
+      } else {
+        warnIfGithubEnabledWithoutFragments();
+      }
+    } else if (settings.claudeFragmentsDir) {
+      generateClaudeLocalMdOrExit(settings.claudeFragmentsDir, settings.checkRtk, false);
     }
     ensureClaudeStubDirs();
     ensureGitignoreStubs();
@@ -333,7 +411,7 @@ export const claudeCodeAdapter: AgentAdapter = {
   // via bwrap args, but not this one, since it was already part of the
   // snapshot's own captured PATH).
   buildSpawnEnv: () => {
-    const realBwrap = spawnSync('which', ['bwrap'], { encoding: 'utf8' }).stdout.trim() || '/usr/bin/bwrap';
+    const realBwrap = resolveRealBwrap();
     const srcDir = fileURLToPath(new URL('../', import.meta.url));
     const binDir = join(srcDir, 'bin');
     chmodSync(join(binDir, 'bwrap'), 0o755);
