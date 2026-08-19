@@ -42,7 +42,7 @@ function verifyClaudeSettingsJson(): void {
 // .claude/.claude/ tree). Pre-creating each as a real directory with a tracked
 // .gitkeep gives bwrap an existing mountpoint to bind over, so it never writes
 // stubs into the working tree. Idempotent.
-const CLAUDE_MASKED_DIRS = ['agents', 'commands', 'hooks', 'routines', 'skills', 'workflows'];
+const CLAUDE_MASKED_DIRS = ['agents', 'commands', 'hooks', 'routines', 'skills', 'workflows', 'output-styles'];
 
 function ensureClaudeStubDirs(): void {
   for (const name of CLAUDE_MASKED_DIRS) {
@@ -78,7 +78,7 @@ const GITIGNORE_STUB_GROUPS = [
   {
     comment: [
       '# Same, under .claude/. The masked *directories* (agents, commands, hooks,',
-      '# routines, skills, workflows) are pre-created with a tracked .gitkeep by',
+      '# routines, skills, workflows, output-styles) are pre-created with a tracked .gitkeep by',
       '# safe-claude-code so bwrap binds over them instead of leaking stubs — see',
       '# ensureClaudeStubDirs() in src/adapters/claude-code.ts. These two are files,',
       "# not directories, so they can't be .gitkeep'd; ignore their launch-time stubs.",
