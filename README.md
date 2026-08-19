@@ -4,8 +4,9 @@ Wrapper CLIs for launching Claude Code or Codex with scoped GitHub and GCP crede
 
 ## Commands
 
-- `safe-claude-code`
-- `safe-codex`
+- `safe-claude-code` — launch Claude Code with scoped credentials under the bwrap-based sandbox setup
+- `safe-codex` — launch Codex with scoped credentials
+- `sbx-claude-code` — orchestrate a user-supplied sandbox script (`--generic-script`) and launch Claude Code inside that sandbox
 
 ## Setup
 
@@ -50,57 +51,15 @@ secret-tool store --label="Github PAT safe-agent-cli" github.pat safe-agent-cli
 
 The PAT name defaults to the current directory name. Use `--gh=<name>` to specify a different one.
 
-### Configure ~/.claude/CLAUDE.md
+### Agent instructions
 
-When launching with `--gh`, Claude is told via `--append-system-prompt` that `GITHUB_TOKEN` is set and which PAT scopes are active. However, `--append-system-prompt` has no effect for background agents. To ensure Claude knows how to use the token in all contexts, add the following to your `~/.claude/CLAUDE.md`:
-
-```markdown
-## GCP
-
-Interaction with GCP resources MUST be done through terraform. DO NOT use the gcloud cli to update resources. If terraform ist not setup in this project, ask and then proceed.
-
-Only apply the following rules if `GOOGLE_OAUTH_ACCESS_TOKEN` is set in the environment. If it is not set, GCP is not available for this session.
-
-
-Credentials are pre-configured in `CLOUDSDK_CONFIG`, so `gcloud` commands work directly. Terraform and other Google client libraries authenticate via `GOOGLE_OAUTH_ACCESS_TOKEN`. The token expires after 1 hour. If a command fails, check if the token has expired and ask for a new one.
-
-If a GCP operation fails due to missing IAM permissions, STOP and ask the user to grant the required role to the service account. NEVER provide gcloud commands for the user to run on your behalf — request the permission and wait for the user to grant it before continuing.
-
-Exception: when requesting permissions for the service account you are currently authenticated as, you MUST provide the full gcloud command so the user can grant it.
-
-
-### Github / Git
-
-You MUST not push empty commits to trigger pipeline. Change them to `workflow_dispatch` and use `gh` to start them.
-
-Only apply the following rules if `GITHUB_TOKEN` is set in the environment. If it is not, `gh` is not available for this session.
-
-#### Polling for CI completion
-
-**`gh run view` does NOT output the word "completed"** — it outputs `✓` or `✗` symbols. The word "completed" only appears in `gh run list` output.
-
-Wrong pattern (loop never exits):
-```bash
-until gh run view <run-id> --repo ... | grep -q "completed"; do sleep 30; done
-```
-
-Correct pattern:
-```bash
-until gh run list --repo <owner>/<repo> --branch <branch> --limit 1 | grep -qE "^completed"; do sleep 30; done
-```
-
-Push using the URL rewrite flag to avoid modifying git config (which may be read-only in the sandbox):
-
-```
-git -c "url.https://${GITHUB_TOKEN}@github.com/.insteadOf=git@github.com:" push origin main
-```
-
-**Never use `-u` / `--set-upstream` when pushing in the sandbox.** The `-u` flag writes upstream tracking entries (`branch.<name>.remote`, `branch.<name>.merge`) to `.git/config`, which the sandbox blocks. The push itself succeeds but produces a harmless config-write error. Omit `-u` — `gh pr create` does not need upstream tracking.
-
-**If I ask you to push on the default branch (e.g. `main`/`master`), ask me first** rather than deciding on your own. Confirm with me before pushing directly to the default branch.
-
-Commit messages should contain my name and email as author and email as per the current git config. You MUST put your name as coauthor to the commit message.
-```
+Don't maintain launch-specific agent instructions (how to use the injected
+GitHub/GCP credentials, sandbox git rules) in a global `~/.claude/CLAUDE.md`.
+Use `claudeFragmentsDir` instead (see "CLAUDE.local.md generation" below): the
+credential-usage instructions ship as built-in fragments and are composed into
+`CLAUDE.local.md` only on launches where they apply. The launcher warns when a
+global `~/.claude/CLAUDE.md` exists, since its content stays outside the
+generated file.
 
 ## Features
 
@@ -108,8 +67,10 @@ Commit messages should contain my name and email as author and email as per the 
   - `--gh` / `--github[=PAT_NAME]`
   - `--gcp` / `--google-cloud`
   - `--project <PROJECT_ID>`
-- GitHub PAT lookup through `secret-tool`
+- GitHub PAT lookup from the system keychain (`security` on macOS, `secret-tool` on Linux)
 - GCP service-account impersonation and temporary ADC/gcloud config generation
+- `CLAUDE.local.md` generation from a personal fragments library plus built-in fragments (see below)
+- `git-sandboxed`, a `GITHUB_TOKEN`-authenticated git wrapper put on `PATH` inside the sandbox when `--gh` is enabled
 - Claude-specific launch behavior through a Claude adapter
 - Best-effort Codex launch behavior through a Codex adapter
 
@@ -225,7 +186,7 @@ and is covered by unit tests.
 
 4. **`.claude/` can't be made writable through settings.** Claude Code binds the
    project root read-write, then layers a hardcoded wall of `--ro-bind` mounts on
-   top that mask `.claude/settings.json`, `.claude/{hooks,skills,commands,agents,workflows,routines}`,
+   top that mask `.claude/settings.json`, `.claude/{hooks,skills,commands,agents,workflows,routines,output-styles}`,
    `.claude/.cc-writes`, `.mcp.json`, `.git/config`, the dotfiles, and more —
    regardless of what `sandbox.filesystem.allowWrite` requests. The shim reads
    the merged Claude settings (`~/.claude/settings.json`, then the project's
@@ -275,6 +236,10 @@ path it re-binds (`rebind:`) — to `/tmp/bwrap-wrapper.log`.
 - `src/adapters/claude-code.ts` — Claude-specific settings handling, env injection, and launch args.
 - `src/adapters/codex.ts` — Codex-specific config/env mapping and launch args.
 - `src/commands/claude-code.tsx`, `src/commands/codex.tsx` — Thin public entrypoints.
+- `src/commands/sbx-claude-code.ts`, `src/sbx/` — Orchestration of a user-supplied sandbox script (build, hook injection, launch).
+- `src/claude-fragments.ts`, `src/fragments/` — CLAUDE.local.md generation and the built-in fragments.
+- `src/user-settings.ts` — Strict parsing of `~/.config/safe-agent-cli/settings.json`.
+- `src/bin/git-sandboxed` — `GITHUB_TOKEN`-authenticated git wrapper for use inside the sandbox (symlinked at `bin/git-sandboxed` for local testing outside it).
 
 ## Development
 
