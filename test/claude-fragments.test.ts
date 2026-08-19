@@ -49,6 +49,16 @@ describe('parseFragment', () => {
       .toThrow(/"githubMasked" must be a boolean/);
   });
 
+  test('parses gcp as a boolean', () => {
+    expect(parseFragment('---\ngcp: true\n---\nbody\n', '/f/a.md').gcp).toBe(true);
+    expect(parseFragment('---\ngcp: false\n---\nbody\n', '/f/a.md').gcp).toBe(false);
+  });
+
+  test('a non-boolean gcp value throws', () => {
+    expect(() => parseFragment('---\ngcp: yes\n---\nbody\n', '/f/a.md'))
+      .toThrow(/"gcp" must be a boolean/);
+  });
+
   test('empty frontmatter yields an unconditioned fragment', () => {
     const f = parseFragment('---\n---\nbody\n', '/f/a.md');
     expect(f.org).toBeUndefined();
@@ -84,10 +94,10 @@ describe('parseFragment', () => {
 describe('fragmentMatches', () => {
   const base = { path: '/f/a.md', body: '' };
 
-  // Defaults githubMasked to false so callers only need to override the dimension
-  // they're actually testing — mirrors generateClaudeLocalMd's own default.
+  // Defaults githubMasked and gcp to false so callers only need to override the
+  // dimension they're actually testing.
   function ctx(overrides: Partial<MatchContext> & Pick<MatchContext, 'org' | 'isolation' | 'github'>): MatchContext {
-    return { githubMasked: false, ...overrides };
+    return { githubMasked: false, gcp: false, ...overrides };
   }
 
   test('no conditions always matches', () => {
@@ -141,9 +151,25 @@ describe('fragmentMatches', () => {
     expect(fragmentMatches(f, ctx({ org: undefined, isolation: 'proxy', github: true, githubMasked: false }))).toBe(true);
     expect(fragmentMatches(f, ctx({ org: undefined, isolation: 'proxy', github: true, githubMasked: true }))).toBe(false);
   });
+
+  test('gcp: true only matches when gcp is enabled', () => {
+    const f = { ...base, gcp: true };
+    expect(fragmentMatches(f, ctx({ org: undefined, isolation: 'proxy', github: false, gcp: true }))).toBe(true);
+    expect(fragmentMatches(f, ctx({ org: undefined, isolation: 'proxy', github: false, gcp: false }))).toBe(false);
+  });
+
+  test('gcp: false only matches when gcp is disabled', () => {
+    const f = { ...base, gcp: false };
+    expect(fragmentMatches(f, ctx({ org: undefined, isolation: 'proxy', github: false, gcp: false }))).toBe(true);
+    expect(fragmentMatches(f, ctx({ org: undefined, isolation: 'proxy', github: false, gcp: true }))).toBe(false);
+  });
 });
 
 describe('generateClaudeLocalMd', () => {
+  // A plain proxy launch with every integration off — tests override only the
+  // dimension they exercise.
+  const PROXY: Omit<MatchContext, 'org'> = { isolation: 'proxy', github: false, githubMasked: false, gcp: false };
+
   function withTempDirs(run: (fragmentsDir: string, repoRoot: string) => void): void {
     const fragmentsDir = mkdtempSync(join(tmpdir(), 'fragments-'));
     const repoRoot = mkdtempSync(join(tmpdir(), 'repo-'));
@@ -157,7 +183,7 @@ describe('generateClaudeLocalMd', () => {
 
   test('throws when the fragments directory does not exist', () => {
     withTempDirs((fragmentsDir, repoRoot) => {
-      expect(() => generateClaudeLocalMd(join(fragmentsDir, 'missing'), repoRoot))
+      expect(() => generateClaudeLocalMd(join(fragmentsDir, 'missing'), repoRoot, PROXY))
         .toThrow(/claudeFragmentsDir does not exist/);
     });
   });
@@ -168,11 +194,11 @@ describe('generateClaudeLocalMd', () => {
       writeFileSync(join(fragmentsDir, 'a-sbx-only.md'), '---\nisolation: sbx\n---\nsbx rule\n');
       writeFileSync(join(fragmentsDir, 'z-not-md.txt'), 'ignored\n');
 
-      const result = generateClaudeLocalMd(fragmentsDir, repoRoot, 'proxy');
-      // +2 built-in fragments shipped in src/fragments (both github: true, neither
-      // matches here since github defaults to false) counted in totalCount but not
-      // matchedCount — see the 'built-in fragments' describe block below.
-      expect(result.totalCount).toBe(4);
+      const result = generateClaudeLocalMd(fragmentsDir, repoRoot, PROXY);
+      // +3 built-in fragments shipped in src/fragments (two github: true, one
+      // gcp: true — none match here since both integrations are off) counted in
+      // totalCount but not matchedCount.
+      expect(result.totalCount).toBe(5);
       expect(result.matchedCount).toBe(1);
       expect(result.rtkAppended).toBe(false);
 
@@ -193,12 +219,12 @@ describe('generateClaudeLocalMd', () => {
     withTempDirs((fragmentsDir, repoRoot) => {
       writeFileSync(join(fragmentsDir, 'a-user.md'), 'user rule\n');
 
-      const withoutGithub = generateClaudeLocalMd(fragmentsDir, repoRoot, 'proxy', false);
+      const withoutGithub = generateClaudeLocalMd(fragmentsDir, repoRoot, PROXY);
       const contentWithout = readFileSync(join(repoRoot, 'CLAUDE.local.md'), 'utf8');
       expect(contentWithout).not.toContain('git-sandboxed');
       expect(withoutGithub.matchedCount).toBe(1);
 
-      const withGithub = generateClaudeLocalMd(fragmentsDir, repoRoot, 'proxy', true, false);
+      const withGithub = generateClaudeLocalMd(fragmentsDir, repoRoot, { ...PROXY, github: true });
       const contentWithGithub = readFileSync(join(repoRoot, 'CLAUDE.local.md'), 'utf8');
       expect(contentWithGithub).toContain('git-sandboxed');
       expect(withGithub.matchedCount).toBe(2);
@@ -210,7 +236,7 @@ describe('generateClaudeLocalMd', () => {
     withTempDirs((fragmentsDir, repoRoot) => {
       writeFileSync(join(fragmentsDir, 'a-user.md'), 'user rule\n');
 
-      const result = generateClaudeLocalMd(fragmentsDir, repoRoot, 'proxy', true, true);
+      const result = generateClaudeLocalMd(fragmentsDir, repoRoot, { ...PROXY, github: true, githubMasked: true });
       const content = readFileSync(join(repoRoot, 'CLAUDE.local.md'), 'utf8');
       expect(content).not.toContain('git-sandboxed push origin main');
       expect(content).toContain('excludedCommands');
@@ -219,12 +245,29 @@ describe('generateClaudeLocalMd', () => {
     });
   });
 
+  test('the built-in gcp-credentials fragment only appears when gcp is enabled', () => {
+    withTempDirs((fragmentsDir, repoRoot) => {
+      writeFileSync(join(fragmentsDir, 'a-user.md'), 'user rule\n');
+
+      const withoutGcp = generateClaudeLocalMd(fragmentsDir, repoRoot, PROXY);
+      const contentWithout = readFileSync(join(repoRoot, 'CLAUDE.local.md'), 'utf8');
+      expect(contentWithout).not.toContain('GOOGLE_OAUTH_ACCESS_TOKEN');
+      expect(withoutGcp.matchedCount).toBe(1);
+
+      const withGcp = generateClaudeLocalMd(fragmentsDir, repoRoot, { ...PROXY, gcp: true });
+      const contentWithGcp = readFileSync(join(repoRoot, 'CLAUDE.local.md'), 'utf8');
+      expect(contentWithGcp).toContain('GOOGLE_OAUTH_ACCESS_TOKEN');
+      expect(contentWithGcp).toContain('CLOUDSDK_CONFIG');
+      expect(withGcp.matchedCount).toBe(2);
+    });
+  });
+
   test('a malformed fragment aborts generation entirely (no partial file written silently)', () => {
     withTempDirs((fragmentsDir, repoRoot) => {
       writeFileSync(join(fragmentsDir, 'ok.md'), 'fine\n');
       writeFileSync(join(fragmentsDir, 'bad.md'), '---\ntypo: x\n---\nbad\n');
 
-      expect(() => generateClaudeLocalMd(fragmentsDir, repoRoot)).toThrow(/unrecognized frontmatter key/);
+      expect(() => generateClaudeLocalMd(fragmentsDir, repoRoot, PROXY)).toThrow(/unrecognized frontmatter key/);
     });
   });
 
@@ -234,7 +277,7 @@ describe('generateClaudeLocalMd', () => {
       const rtkMdPath = join(repoRoot, 'RTK.md');
       writeFileSync(rtkMdPath, 'rtk rule\n');
 
-      const result = generateClaudeLocalMd(fragmentsDir, repoRoot, 'proxy', false, false, rtkMdPath);
+      const result = generateClaudeLocalMd(fragmentsDir, repoRoot, PROXY, rtkMdPath);
       expect(result.rtkAppended).toBe(true);
       expect(result.matchedCount).toBe(1); // rtkMdPath isn't counted as a fragment
 
@@ -251,7 +294,7 @@ describe('generateClaudeLocalMd', () => {
     withTempDirs((fragmentsDir, repoRoot) => {
       writeFileSync(join(fragmentsDir, 'a.md'), 'fragment rule\n');
 
-      expect(() => generateClaudeLocalMd(fragmentsDir, repoRoot, 'proxy', false, false, join(repoRoot, 'RTK.md')))
+      expect(() => generateClaudeLocalMd(fragmentsDir, repoRoot, PROXY, join(repoRoot, 'RTK.md')))
         .toThrow(/checkRtk is enabled but .*RTK\.md does not exist/);
     });
   });

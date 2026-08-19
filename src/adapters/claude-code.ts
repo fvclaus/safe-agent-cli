@@ -6,7 +6,7 @@ import { fileURLToPath } from 'node:url';
 import type { AgentAdapter } from '../launcher/safe-agent-cli.js';
 import { mergeReadPaths, safeChainReadPaths } from '../safe-chain.js';
 import { loadUserSettings } from '../user-settings.js';
-import { expandHome, generateClaudeLocalMd } from '../claude-fragments.js';
+import { expandHome, generateClaudeLocalMd, type MatchContext } from '../claude-fragments.js';
 import { missingRtkWritePaths, rtkInitializationFailures } from '../rtk.js';
 import { resolveRealBwrap } from '../real-bwrap.js';
 
@@ -63,10 +63,12 @@ function ensureClaudeStubDirs(): void {
 
 // The sandbox leaves bind-mount stubs in the working tree on every launch (see
 // ensureClaudeStubDirs for the .claude/ directory case). The file stubs below
-// can't be pre-created as directories, so we keep them out of version control.
-// Each launch ensures .gitignore carries these patterns; only genuinely missing
-// lines are appended, under their group comment, so it's idempotent and never
-// clobbers a user's existing entries.
+// can't be pre-created as directories, so we keep them out of version control —
+// along with CLAUDE.local.md, which this tool regenerates per launch (see
+// generateClaudeLocalMdOrExit) and which is personal by definition. Each launch
+// ensures .gitignore carries these patterns; only genuinely missing lines are
+// appended, under their group comment, so it's idempotent and never clobbers a
+// user's existing entries.
 const GITIGNORE_STUB_GROUPS = [
   {
     comment: '# Claude Code sandbox bind-mount stubs (created automatically on each launch)',
@@ -84,6 +86,13 @@ const GITIGNORE_STUB_GROUPS = [
       "# not directories, so they can't be .gitkeep'd; ignore their launch-time stubs.",
     ].join('\n'),
     patterns: ['.claude/launch.json', '.claude/scheduled_tasks.json'],
+  },
+  {
+    comment: [
+      '# CLAUDE.local.md is personal, per-launch context — safe-claude-code regenerates',
+      '# it from claudeFragmentsDir on every launch (when configured). Never commit it.',
+    ].join('\n'),
+    patterns: ['CLAUDE.local.md'],
   },
 ];
 
@@ -106,7 +115,7 @@ function ensureGitignoreStubs(): void {
 
   const sep = existing.length === 0 ? '' : existing.endsWith('\n') ? '\n' : '\n\n';
   writeFileSync(gitignorePath, existing + sep + blocks.join('\n\n') + '\n', 'utf8');
-  log(chalk.bold.green('OK:') + ` added ${added} sandbox-stub pattern(s) to ${gitignorePath}`);
+  log(chalk.bold.green('OK:') + ` added ${added} pattern(s) to ${gitignorePath}`);
 }
 
 function ensureClaudeSandboxEnabled(): void {
@@ -332,13 +341,12 @@ function warnIfGithubEnabledWithoutFragments(): void {
 function generateClaudeLocalMdOrExit(
   fragmentsDir: string,
   checkRtk: boolean,
-  github: boolean,
-  githubMasked = false,
+  launch: Omit<MatchContext, 'org' | 'isolation'>,
 ): void {
   const dir = expandHome(fragmentsDir, homedir());
   const rtkMdPath = checkRtk ? join(homedir(), '.claude', 'RTK.md') : undefined;
   try {
-    const result = generateClaudeLocalMd(dir, process.cwd(), 'proxy', github, githubMasked, rtkMdPath);
+    const result = generateClaudeLocalMd(dir, process.cwd(), { isolation: 'proxy', ...launch }, rtkMdPath);
     log(
       chalk.bold.green('OK:') +
         ` generated CLAUDE.local.md from ${result.matchedCount}/${result.totalCount} fragment(s) in ${dir}` +
@@ -364,9 +372,10 @@ export const claudeCodeAdapter: AgentAdapter = {
       warnIfRtkWriteAccessMissing();
     }
     warnIfGlobalClaudeMdExists();
-    if (context.githubToken !== undefined) {
-      const githubTokenMasked = isGithubTokenMasked();
-      if (githubTokenMasked && !hasGitExcludedCommand()) {
+    const github = context.githubToken !== undefined;
+    const githubMasked = github && isGithubTokenMasked();
+    if (github) {
+      if (githubMasked && !hasGitExcludedCommand()) {
         log(
           chalk.bold.red('ERROR:') +
             ' GITHUB_TOKEN is masked in this sandbox (sandbox.credentials.envVars), and no absolute-path ' +
@@ -379,13 +388,16 @@ export const claudeCodeAdapter: AgentAdapter = {
         );
         process.exit(1);
       }
-      if (settings.claudeFragmentsDir) {
-        generateClaudeLocalMdOrExit(settings.claudeFragmentsDir, settings.checkRtk, true, githubTokenMasked);
-      } else {
+      if (!settings.claudeFragmentsDir) {
         warnIfGithubEnabledWithoutFragments();
       }
-    } else if (settings.claudeFragmentsDir) {
-      generateClaudeLocalMdOrExit(settings.claudeFragmentsDir, settings.checkRtk, false);
+    }
+    if (settings.claudeFragmentsDir) {
+      generateClaudeLocalMdOrExit(settings.claudeFragmentsDir, settings.checkRtk, {
+        github,
+        githubMasked,
+        gcp: context.gcpToken !== undefined,
+      });
     }
     ensureClaudeStubDirs();
     ensureGitignoreStubs();

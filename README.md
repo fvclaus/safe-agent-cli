@@ -157,18 +157,27 @@ Rules that only apply in Developer-Akademie-GmbH repos.
   `origin` remote. A repo with no remote at all doesn't fail — org-scoped
   fragments simply don't match. A remote on a host other than `github.com`
   aborts generation (and the launch).
-- `isolation` matches `proxy` (the default, plain host launches) or `sbx`
-  (reserved for future Docker-sandbox integration — nothing sets this today).
-- Both keys accept a single string or a list (OR within a key); when a
-  fragment sets more than one key, all of them must match (AND across keys).
-- A key a fragment omits is a wildcard for that dimension; a fragment with no
-  frontmatter at all always matches.
+- `isolation` matches `proxy` (`safe-claude-code`'s bwrap-based launches) or
+  `sbx` (`sbx-claude-code` launches).
+- `org` and `isolation` accept a single string or a list (OR within a key).
+- `github` (boolean) matches whether the launch has `--gh`/`--github` enabled.
+- `githubMasked` (boolean) matches whether Claude Code's own sandbox masks
+  `GITHUB_TOKEN` (`sandbox.credentials.envVars`) — only meaningful alongside
+  `github: true`.
+- `gcp` (boolean) matches whether the launch has `--gcp`/`--google-cloud`
+  enabled.
+- When a fragment sets more than one key, all of them must match (AND across
+  keys). A key a fragment omits is a wildcard for that dimension; a fragment
+  with no frontmatter at all always matches.
 
 Matching fragments are concatenated in alphabetical filename order, each
 preceded by a comment naming its source path, under a header noting the file
 is auto-generated and pointing back at `claudeFragmentsDir` — so an agent
 asked to change an instruction knows to edit the fragment, not the generated
-file. Any problem (a missing fragments directory, malformed frontmatter, an
+file. safe-agent-cli's own built-in fragments in
+[`src/fragments/`](src/fragments/) (e.g. how to use `git-sandboxed`, or the
+GCP credential environment) go through the same matching and are appended
+after the user's own fragments. Any problem (a missing fragments directory, malformed frontmatter, an
 unsupported git remote) aborts the launch outright; this feature never
 silently degrades.
 

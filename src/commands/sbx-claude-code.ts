@@ -123,8 +123,13 @@ async function main(): Promise<void> {
   if (userSettings.claudeFragmentsDir) {
     const dir = expandHome(userSettings.claudeFragmentsDir, homedir());
     const rtkMdPath = userSettings.checkRtk ? join(homedir(), '.claude', 'RTK.md') : undefined;
-    // sbx-claude-code doesn't wire up --gh yet, so github-scoped fragments never match here.
-    const result = generateClaudeLocalMd(dir, process.cwd(), 'sbx', false, false, rtkMdPath);
+    // sbx-claude-code doesn't wire up --gh or --gcp yet, so github-/gcp-scoped fragments never match here.
+    const result = generateClaudeLocalMd(
+      dir,
+      process.cwd(),
+      { isolation: 'sbx', github: false, githubMasked: false, gcp: false },
+      rtkMdPath,
+    );
     log(
       chalk.bold.green('OK:') +
         ` generated CLAUDE.local.md from ${result.matchedCount}/${result.totalCount} fragment(s) in ${dir}` +
