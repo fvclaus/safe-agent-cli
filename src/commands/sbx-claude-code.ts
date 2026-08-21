@@ -4,6 +4,7 @@ import { existsSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { expandHome, generateClaudeLocalMd } from '../claude-fragments.js';
+import { ensureClaudeSandboxSetting } from '../claude-sandbox-setting.js';
 import { requireGenericScript, resolveSandboxName, runGenericScript } from '../sbx/generic-script.js';
 import { syncSkillsIntoSandbox } from '../sbx/copy-skills.js';
 import { mergeSettingsSbxIntoSandbox } from '../sbx/merge-settings.js';
@@ -108,6 +109,14 @@ async function main(): Promise<void> {
   // sandbox name), so it has to reach those two as well or we'd prepare one
   // sandbox and launch another. See resolveSandboxName's comment.
   const launchSwitches = args.launchCommand.slice(1);
+
+  // The sbx (Docker sandboxes) container already provides isolation; Claude
+  // Code's own bwrap-based sandbox running again inside it is redundant and
+  // can conflict (nested sandboxing). Writes to the project's
+  // .claude/settings.local.json — the generic script bind-mounts this
+  // directory into the sandbox at the same path, so this is the same file
+  // Claude Code reads once launched inside the container.
+  ensureClaudeSandboxSetting(false, log);
 
   const settingsSbxPath = join(homedir(), '.claude', 'settings-sbx.json');
   const settingsSbx = loadSettingsSbx(settingsSbxPath);

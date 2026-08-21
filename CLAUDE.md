@@ -20,6 +20,10 @@ MUST use **bun** for all package management and script execution. NEVER use npm,
   Owns GCP CLI flags and GCP impersonation setup.
 - [src/adapters/claude-code.ts](src/adapters/claude-code.ts)
   Owns Claude-specific behavior such as `.claude/settings*.json` handling, `bwrap` wiring, and Claude launch args.
+- [src/claude-sandbox-setting.ts](src/claude-sandbox-setting.ts)
+  Shared helper that forces `sandbox.enabled` in the project's (host-side) `.claude/settings.local.json`. Used
+  with `true` by the bwrap adapter and `false` by `sbx-claude-code` — see the sbx adapter section below for why
+  this is a host-side write, not a write into the sandbox container.
 - [src/adapters/codex.ts](src/adapters/codex.ts)
   Owns Codex-specific launch args and config mapping.
 - [src/commands/claude-code.tsx](src/commands/claude-code.tsx), [src/commands/codex.tsx](src/commands/codex.tsx)
@@ -76,6 +80,13 @@ the design principle above.
 ```bash
 sbx-claude-code --generic-script ~/workspace/infrastructure/sbx/claude-generic.sh -- run
 ```
+
+Every launch path (bwrap and sbx alike) forces `sandbox.enabled` in the project's (host-side)
+`.claude/settings.local.json` on start, via the shared `ensureClaudeSandboxSetting` helper — `true`
+for the bwrap adapter, `false` for `sbx-claude-code`, since Claude Code's own bwrap sandbox running
+again inside the already-isolated sbx container is redundant and can conflict. This is a host-side
+file, bind-mounted into the sandbox by the generic script, not a file that needs reconstructing
+inside the container.
 
 ## IMPORTANT: Testing changes
 
