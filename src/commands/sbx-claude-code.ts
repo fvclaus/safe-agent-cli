@@ -5,6 +5,7 @@ import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { expandHome, generateClaudeLocalMd } from '../claude-fragments.js';
 import { ensureClaudeSandboxSetting } from '../claude-sandbox-setting.js';
+import { isGithubConfigured } from '../sbx/github-secret.js';
 import { requireGenericScript, resolveSandboxName, runGenericScript } from '../sbx/generic-script.js';
 import { syncSkillsIntoSandbox } from '../sbx/copy-skills.js';
 import { mergeSettingsSbxIntoSandbox } from '../sbx/merge-settings.js';
@@ -39,6 +40,13 @@ function parseArgs(argv: string[]): Args {
     } else if (a === '--help' || a === '-h') {
       printHelp();
       process.exit(0);
+    } else if (a === '--gh' || a === '--github' || a?.startsWith('--gh=') || a?.startsWith('--github=')) {
+      throw new Error(
+        `${a} is not supported by sbx-claude-code — GitHub access inside sbx is proxy-managed. ` +
+        'Configure it with `sbx secret set github` instead.',
+      );
+    } else {
+      throw new Error(`unrecognized flag: ${a}\nUse '--' to pass flags through to the launch command instead.`);
     }
   }
   return args;
@@ -85,7 +93,11 @@ Reads (required, hard error if missing or malformed):
 
 Also honors claudeFragmentsDir / checkRtk from
 ~/.config/safe-agent-cli/settings.json, same as safe-claude-code — generates
-CLAUDE.local.md (isolation: sbx) before the sandbox starts.
+CLAUDE.local.md (isolation: sbx) before the sandbox starts. GitHub-scoped
+fragments are matched based on whether a "github" sbx secret is configured
+(\`sbx secret ls --service github\`) — there is no --gh/--github flag here;
+GitHub access under sbx is proxy-managed, configure it with
+\`sbx secret set github\`.
 
 Example:
   sbx-claude-code --generic-script ~/workspace/infrastructure/sbx/claude-generic.sh -- run
@@ -128,15 +140,21 @@ async function main(): Promise<void> {
   const sandboxName = resolveSandboxName(genericScript, launchSwitches);
   log(chalk.bold.green('OK:') + ` resolved sandbox name: ${sandboxName}`);
 
+  // sbx proxies GitHub credentials into the container itself (see
+  // sbx/github-secret.ts) — there's no --gh flag to wire up, only whether a
+  // "github" service secret is configured for this sandbox.
+  const github = isGithubConfigured(sandboxName);
+  log(chalk.bold.green('OK:') + ` github: ${github ? 'configured (sbx secret)' : 'not configured'}`);
+
   const userSettings = loadUserSettings(log);
   if (userSettings.claudeFragmentsDir) {
     const dir = expandHome(userSettings.claudeFragmentsDir, homedir());
     const rtkMdPath = userSettings.checkRtk ? join(homedir(), '.claude', 'RTK.md') : undefined;
-    // sbx-claude-code doesn't wire up --gh or --gcp yet, so github-/gcp-scoped fragments never match here.
+    // sbx-claude-code doesn't wire up --gcp yet, so gcp-scoped fragments never match here.
     const result = generateClaudeLocalMd(
       dir,
       process.cwd(),
-      { isolation: 'sbx', github: false, githubMasked: false, gcp: false },
+      { isolation: 'sbx', github, githubMasked: false, gcp: false },
       rtkMdPath,
     );
     log(

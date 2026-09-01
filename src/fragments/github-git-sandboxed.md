@@ -1,4 +1,5 @@
 ---
+isolation: proxy
 github: true
 githubMasked: false
 ---
