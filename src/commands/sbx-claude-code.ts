@@ -11,6 +11,7 @@ import { syncSkillsIntoSandbox } from '../sbx/copy-skills.js';
 import { mergeSettingsSbxIntoSandbox } from '../sbx/merge-settings.js';
 import { loadSettingsSbx } from '../sbx/settings-sbx.js';
 import { loadUserSettings } from '../user-settings.js';
+import { acquireSessionLock, releaseSessionLock } from '../session-lock.js';
 
 const log = (msg: string) => {
   process.stderr.write(msg + '\n');
@@ -122,6 +123,24 @@ async function main(): Promise<void> {
   // sandbox and launch another. See resolveSandboxName's comment.
   const launchSwitches = args.launchCommand.slice(1);
 
+  // resolve-name doesn't require the sandbox to already be built, so this can
+  // run ahead of the build step — needed early so the session lock (acquired
+  // next) knows whether GitHub is configured before doing anything else.
+  const sandboxName = resolveSandboxName(genericScript, launchSwitches);
+  log(chalk.bold.green('OK:') + ` resolved sandbox name: ${sandboxName}`);
+
+  // sbx proxies GitHub credentials into the container itself (see
+  // sbx/github-secret.ts) — there's no --gh flag to wire up, only whether a
+  // "github" service secret is configured for this sandbox.
+  const github = isGithubConfigured(sandboxName);
+  log(chalk.bold.green('OK:') + ` github: ${github ? 'configured (sbx secret)' : 'not configured'}`);
+
+  // sbx-claude-code doesn't wire up --gcp yet, so this is always false here.
+  acquireSessionLock(process.cwd(), { agent: 'claude', isolation: 'sbx', github, gcp: false });
+  process.on('exit', releaseSessionLock);
+  process.on('SIGINT',  () => { releaseSessionLock(); process.exit(130); });
+  process.on('SIGTERM', () => { releaseSessionLock(); process.exit(143); });
+
   // The sbx (Docker sandboxes) container already provides isolation; Claude
   // Code's own bwrap-based sandbox running again inside it is redundant and
   // can conflict (nested sandboxing). Writes to the project's
@@ -136,15 +155,6 @@ async function main(): Promise<void> {
 
   log(chalk.bold.cyan('>>') + ` ${genericScript} ${['build', ...launchSwitches].join(' ')}`);
   runGenericScript(genericScript, ['build', ...launchSwitches]);
-
-  const sandboxName = resolveSandboxName(genericScript, launchSwitches);
-  log(chalk.bold.green('OK:') + ` resolved sandbox name: ${sandboxName}`);
-
-  // sbx proxies GitHub credentials into the container itself (see
-  // sbx/github-secret.ts) — there's no --gh flag to wire up, only whether a
-  // "github" service secret is configured for this sandbox.
-  const github = isGithubConfigured(sandboxName);
-  log(chalk.bold.green('OK:') + ` github: ${github ? 'configured (sbx secret)' : 'not configured'}`);
 
   const userSettings = loadUserSettings(log);
   if (userSettings.claudeFragmentsDir) {

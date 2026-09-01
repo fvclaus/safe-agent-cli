@@ -13,6 +13,7 @@ import { gcpCliOptions, setupGcpIntegration } from '../integrations/gcp.js';
 import type { GithubCliArgs } from '../integrations/github.js';
 import { githubCliOptions, setupGithubIntegration } from '../integrations/github.js';
 import { checkSensitiveEnv } from '../env-check.js';
+import { acquireSessionLock, releaseSessionLock } from '../session-lock.js';
 
 const log = (msg: string) => process.stderr.write(msg + '\n');
 
@@ -259,6 +260,7 @@ export async function runSafeAgentCli(adapter: AgentAdapter): Promise<void> {
   };
 
   const cleanup = () => {
+    releaseSessionLock();
     for (const dir of [...gcp.cleanupDirs, ...github.cleanupDirs]) {
       try { rmSync(dir, { recursive: true, force: true }); } catch { /* ignore */ }
     }
@@ -267,6 +269,13 @@ export async function runSafeAgentCli(adapter: AgentAdapter): Promise<void> {
   process.on('exit', cleanup);
   process.on('SIGINT',  () => { cleanup(); process.exit(130); });
   process.on('SIGTERM', () => { cleanup(); process.exit(143); });
+
+  acquireSessionLock(process.cwd(), {
+    agent: adapter.executable === 'codex' ? 'codex' : 'claude',
+    isolation: 'proxy',
+    github: context.githubToken !== undefined,
+    gcp: context.gcpToken !== undefined,
+  });
 
   checkOriginHead();
   await checkSensitiveEnv(credentialEnv, log);
