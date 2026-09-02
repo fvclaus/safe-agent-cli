@@ -17,6 +17,11 @@ import { spawnSync } from 'node:child_process';
 // is meant — e.g. claude-generic.sh's `--clone` changes the sandbox name. If
 // they weren't forwarded, we'd build and inject hooks into one sandbox and then
 // launch a different one, with nothing to signal the mismatch.
+//
+// The script is executed directly (not via `bash <script>`), so its own
+// shebang decides the interpreter — a bash wrapper and a bun/TS script (e.g.
+// claude-generic.ts, run straight from a local checkout) both work as long as
+// the file is executable.
 
 export function requireGenericScript(path: string | undefined): string {
   if (!path) {
@@ -37,10 +42,11 @@ export function requireGenericScript(path: string | undefined): string {
  * Runs `<script> <args...>` with inherited stdio (interactive: may prompt,
  * e.g. on template drift). Takes arbitrary args rather than a fixed command
  * so the final launch step isn't locked to assuming the script defines a
- * `run` subcommand — see runFinalCommand.
+ * `run` subcommand — see runFinalCommand. Executed directly (relying on its
+ * shebang) so the script isn't required to be a bash script.
  */
 export function runGenericScript(scriptPath: string, args: string[]): void {
-  const result = spawnSync('bash', [scriptPath, ...args], { stdio: 'inherit' });
+  const result = spawnSync(scriptPath, args, { stdio: 'inherit' });
   if (result.error) throw result.error;
   const status = result.status ?? 1;
   if (status !== 0) {
@@ -62,7 +68,7 @@ export function runGenericScript(scriptPath: string, args: string[]): void {
  * script mounts extra read-only paths.
  */
 export function resolveSandboxName(scriptPath: string, switches: string[] = []): string {
-  const result = spawnSync('bash', [scriptPath, 'resolve-name', ...switches], { encoding: 'utf8' });
+  const result = spawnSync(scriptPath, ['resolve-name', ...switches], { encoding: 'utf8' });
   if (result.error) throw result.error;
   const status = result.status ?? 1;
   if (status !== 0) {

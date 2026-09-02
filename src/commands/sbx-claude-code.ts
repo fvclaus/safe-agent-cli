@@ -63,7 +63,10 @@ sandbox-creation script alone doesn't know about.
 Required:
   --generic-script <path>   Script that knows how to build/name the sandbox
                              (e.g. claude-generic.sh). Must support the
-                             'build' and 'resolve-name' commands.
+                             'build' and 'resolve-name' commands, and must be
+                             executable — it's run directly (not via bash), so
+                             its own shebang picks the interpreter (bash,
+                             bun, ...).
                              No default — must be passed explicitly.
 
   -- <command...>           Everything after '--' is passed to the generic
