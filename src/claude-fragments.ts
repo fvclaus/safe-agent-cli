@@ -165,6 +165,22 @@ function renderFragment(fragment: Fragment): string {
   return `<!-- fragment: ${basename(fragment.path)} -->\n${fragment.body.trim()}\n`;
 }
 
+// Files pushed in via `sbx cp` for a project symlink whose target is a host
+// file (see symlink-copy.ts) are one-way, per-launch copies — edits made
+// inside the sandbox are silently overwritten on the next launch. This tells
+// the agent that up front rather than leaving it to discover the hard way.
+function renderSymlinkCopyNotice(paths: string[]): string {
+  return [
+    '## Files copied into this sandbox',
+    '',
+    'These paths are outside the project dir on the host, referenced by a project ' +
+      'symlink, and were copied in at launch. Edits made here are NOT synced back ' +
+      'to the host, and are overwritten with fresh host content on the next launch:',
+    '',
+    ...paths.map((p) => `- ${p}`),
+  ].join('\n');
+}
+
 /** Expands a leading `~` or `~/...` against `home`. Leaves other paths untouched. */
 export function expandHome(path: string, home: string): string {
   if (path === '~') return home;
@@ -190,15 +206,18 @@ export interface GenerateResult {
  * own fragments. When `rtkMdPath` is given, its content is read and appended
  * last of all, unconditionally, exactly like a fragment with no frontmatter —
  * this is how `checkRtk` users get RTK.md into context now, instead of a
- * hand-maintained `@RTK.md` import in CLAUDE.md. Throws on any failure
- * (missing fragments directory, malformed fragment, unsupported git remote,
- * missing rtkMdPath) — the caller is expected to treat that as fatal.
+ * hand-maintained `@RTK.md` import in CLAUDE.md. When `copiedSymlinkPaths` is
+ * non-empty, a notice listing them (see renderSymlinkCopyNotice) is appended
+ * last of all. Throws on any failure (missing fragments directory, malformed
+ * fragment, unsupported git remote, missing rtkMdPath) — the caller is
+ * expected to treat that as fatal.
  */
 export function generateClaudeLocalMd(
   fragmentsDir: string,
   repoRoot: string,
   launch: Omit<MatchContext, 'org'>,
   rtkMdPath?: string,
+  copiedSymlinkPaths?: string[],
 ): GenerateResult {
   if (!existsSync(fragmentsDir)) {
     throw new Error(`claudeFragmentsDir does not exist: ${fragmentsDir}`);
@@ -232,6 +251,12 @@ export function generateClaudeLocalMd(
       throw new Error(`checkRtk is enabled but ${rtkMdPath} does not exist — run: rtk init -g`);
     }
     sections.push(renderFragment({ path: rtkMdPath, body: readFileSync(rtkMdPath, 'utf8') }));
+  }
+
+  if (copiedSymlinkPaths && copiedSymlinkPaths.length > 0) {
+    sections.push(
+      renderFragment({ path: 'sbx-symlink-copies.md', body: renderSymlinkCopyNotice(copiedSymlinkPaths) }),
+    );
   }
 
   const content = [renderHeader(fragmentsDir), ...sections, renderFooter(fragmentsDir)].join('\n');

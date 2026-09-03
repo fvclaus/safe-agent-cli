@@ -10,6 +10,8 @@ import { requireGenericScript, resolveSandboxName, runGenericScript } from '../s
 import { syncSkillsIntoSandbox } from '../sbx/copy-skills.js';
 import { mergeSettingsSbxIntoSandbox } from '../sbx/merge-settings.js';
 import { loadSettingsSbx } from '../sbx/settings-sbx.js';
+import { copySymlinkFilesIntoSandbox } from '../sbx/symlink-copy.js';
+import { resolveSymlinkMountPlan } from '../sbx/symlink-mounts.js';
 import { loadUserSettings } from '../user-settings.js';
 import { acquireSessionLock, releaseSessionLock } from '../session-lock.js';
 
@@ -95,13 +97,25 @@ Reads (required, hard error if missing or malformed):
                                  wiping this script's setup output) across
                                  every sandbox rebuild.
 
-Also honors claudeFragmentsDir / checkRtk from
+Also honors claudeFragmentsDir / checkRtk / sbxSymlinkScanExcludeDirs from
 ~/.config/safe-agent-cli/settings.json, same as safe-claude-code — generates
 CLAUDE.local.md (isolation: sbx) before the sandbox starts. GitHub-scoped
 fragments are matched based on whether a "github" sbx secret is configured
 (\`sbx secret ls --service github\`) — there is no --gh/--github flag here;
 GitHub access under sbx is proxy-managed, configure it with
 \`sbx secret set github\`.
+
+Project symlinks whose target lives outside the project dir (e.g. \`.env\` ->
+a real secrets file under $HOME) dangle inside sbx, since only the project
+dir is mounted in. Before 'build' runs, the project is scanned for such
+symlinks; for each one not yet approved for this sandbox, you're prompted
+once (approval remembered in ~/.config/safe-agent-cli/sbx-symlink-approvals.json).
+Directory targets are passed to 'build' as \`--bind-mount <path>\` (your
+claude-generic.sh must support this flag) — live, two-way. File targets are
+copied in via \`sbx cp\` after the sandbox exists — one-way, refreshed every
+launch, listed in CLAUDE.local.md when claudeFragmentsDir is set. Relative
+targets are never auto-mounted (only warned about), since their resolution
+depends on the sandbox's mount layout matching the host's.
 
 Example:
   sbx-claude-code --generic-script ~/workspace/infrastructure/sbx/claude-generic.sh -- run
@@ -156,10 +170,47 @@ async function main(): Promise<void> {
   const settingsSbx = loadSettingsSbx(settingsSbxPath);
   log(chalk.bold.green('OK:') + ` loaded ${settingsSbxPath}`);
 
-  log(chalk.bold.cyan('>>') + ` ${genericScript} ${['build', ...launchSwitches].join(' ')}`);
-  runGenericScript(genericScript, ['build', ...launchSwitches]);
-
   const userSettings = loadUserSettings(log);
+
+  // Project symlinks whose target lives outside the project dir (e.g. `.env`
+  // -> a real secrets file under $HOME) dangle inside sbx, since only the
+  // project dir is mounted in. Directory targets get bind-mounted; file
+  // targets are pushed in later, once the sandbox exists — see
+  // symlink-mounts.ts / symlink-copy.ts. Must run before `build` so the
+  // --bind-mount switches it needs are already known.
+  const symlinkPlan = await resolveSymlinkMountPlan({
+    projectRoot: process.cwd(),
+    sandboxName,
+    ...(userSettings.sbxSymlinkScanExcludeDirs !== undefined && {
+      excludeDirs: userSettings.sbxSymlinkScanExcludeDirs,
+    }),
+  });
+  for (const warning of symlinkPlan.warnings) {
+    log(chalk.bold.yellow('WARNING:') + ` ${warning}`);
+  }
+  for (const declined of symlinkPlan.declined) {
+    log(chalk.bold.yellow('SKIP:') + ` not exposing ${declined.source} -> ${declined.target} (declined)`);
+  }
+  if (symlinkPlan.mounted.length > 0) {
+    log(
+      chalk.bold.green('OK:') +
+        ` bind-mounting ${symlinkPlan.mounted.length} symlink target dir(s) into sandbox '${sandboxName}': ` +
+        symlinkPlan.mounted.map((m) => m.target).join(', '),
+    );
+  }
+
+  log(chalk.bold.cyan('>>') + ` ${genericScript} ${['build', ...launchSwitches, ...symlinkPlan.bindMountArgs].join(' ')}`);
+  runGenericScript(genericScript, ['build', ...launchSwitches, ...symlinkPlan.bindMountArgs]);
+
+  if (symlinkPlan.fileCopies.length > 0) {
+    copySymlinkFilesIntoSandbox(sandboxName, symlinkPlan.fileCopies);
+    log(
+      chalk.bold.green('OK:') +
+        ` copied ${symlinkPlan.fileCopies.length} symlink target file(s) into sandbox '${sandboxName}' ` +
+        `(one-way, refreshed every launch): ${symlinkPlan.fileCopies.map((c) => c.target).join(', ')}`,
+    );
+  }
+
   if (userSettings.claudeFragmentsDir) {
     const dir = expandHome(userSettings.claudeFragmentsDir, homedir());
     const rtkMdPath = userSettings.checkRtk ? join(homedir(), '.claude', 'RTK.md') : undefined;
@@ -169,6 +220,7 @@ async function main(): Promise<void> {
       process.cwd(),
       { isolation: 'sbx', github, githubMasked: false, gcp: false },
       rtkMdPath,
+      symlinkPlan.fileCopies.map((c) => c.target),
     );
     log(
       chalk.bold.green('OK:') +

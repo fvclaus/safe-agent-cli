@@ -77,6 +77,24 @@ means mode must be expressed as a switch: `-- run --clone`, not `-- clone`
 missing/malformed) — safe-agent-cli never ships or assumes its content, per
 the design principle above.
 
+Before `build` runs, the project dir is scanned for symlinks whose target
+lives outside it (e.g. `.env` -> a real secrets file under `$HOME`) — sbx only
+mounts the project dir, so such a symlink would otherwise dangle. Only
+absolute-target symlinks are handled (relative ones are only warned about —
+resolution would depend on the sandbox's mount layout matching the host's).
+Each not-yet-approved (sandbox, source, target) triple prompts once;
+approval lives in `~/.config/safe-agent-cli/sbx-symlink-approvals.json` and
+is invalidated if the target changes. `sbx create` only accepts directory
+workspaces, so approved targets are routed by kind: a directory is passed to
+`build` as `--bind-mount <path>` (live, two-way); a file is pushed in via
+`sbx cp` once the sandbox exists (one-way, redone every launch, listed in
+CLAUDE.local.md) rather than bind-mounting its parent dir, which would leak
+every sibling in it. See `src/sbx/symlink-scan.ts`,
+`src/sbx/symlink-approvals.ts`, `src/sbx/symlink-mounts.ts`,
+`src/sbx/symlink-copy.ts`. Default excludes (`node_modules`, `.git`, `dist`,
+`build`, `.next`, `target`, `vendor`) extend via `sbxSymlinkScanExcludeDirs`
+in `~/.config/safe-agent-cli/settings.json`.
+
 ```bash
 sbx-claude-code --generic-script ~/workspace/infrastructure/sbx/claude-generic.sh -- run
 ```

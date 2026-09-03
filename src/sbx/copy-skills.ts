@@ -87,7 +87,7 @@ function listHostSkills(hostSkillsDir: string): string[] {
   return skills;
 }
 
-function runSbx(args: string[], what: string): void {
+export function runSbx(args: string[], what: string): void {
   const result = spawnSync('sbx', args, { encoding: 'utf8' });
   if (result.error) throw result.error;
   if ((result.status ?? 1) !== 0) {

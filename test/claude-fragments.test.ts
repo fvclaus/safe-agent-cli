@@ -195,10 +195,10 @@ describe('generateClaudeLocalMd', () => {
       writeFileSync(join(fragmentsDir, 'z-not-md.txt'), 'ignored\n');
 
       const result = generateClaudeLocalMd(fragmentsDir, repoRoot, PROXY);
-      // +3 built-in fragments shipped in src/fragments (two github: true, one
-      // gcp: true — none match here since both integrations are off) counted in
-      // totalCount but not matchedCount.
-      expect(result.totalCount).toBe(5);
+      // +4 built-in fragments shipped in src/fragments (three github: true,
+      // one gcp: true — none match here since both integrations are off)
+      // counted in totalCount but not matchedCount.
+      expect(result.totalCount).toBe(6);
       expect(result.matchedCount).toBe(1);
       expect(result.rtkAppended).toBe(false);
 
@@ -296,6 +296,31 @@ describe('generateClaudeLocalMd', () => {
 
       expect(() => generateClaudeLocalMd(fragmentsDir, repoRoot, PROXY, join(repoRoot, 'RTK.md')))
         .toThrow(/checkRtk is enabled but .*RTK\.md does not exist/);
+    });
+  });
+
+  test('appends a copied-symlink-paths notice last, when given', () => {
+    withTempDirs((fragmentsDir, repoRoot) => {
+      writeFileSync(join(fragmentsDir, 'a.md'), 'fragment rule\n');
+
+      const result = generateClaudeLocalMd(fragmentsDir, repoRoot, PROXY, undefined, ['/home/u/.secrets/env']);
+      expect(result.matchedCount).toBe(1); // the notice isn't counted as a fragment
+
+      const content = readFileSync(join(repoRoot, 'CLAUDE.local.md'), 'utf8');
+      expect(content).toContain('fragment rule');
+      expect(content).toContain('/home/u/.secrets/env');
+      expect(content).toContain('NOT synced back');
+      expect(content.indexOf('fragment rule')).toBeLessThan(content.indexOf('/home/u/.secrets/env'));
+    });
+  });
+
+  test('no notice section when copiedSymlinkPaths is empty or omitted', () => {
+    withTempDirs((fragmentsDir, repoRoot) => {
+      writeFileSync(join(fragmentsDir, 'a.md'), 'fragment rule\n');
+
+      generateClaudeLocalMd(fragmentsDir, repoRoot, PROXY, undefined, []);
+      const content = readFileSync(join(repoRoot, 'CLAUDE.local.md'), 'utf8');
+      expect(content).not.toContain('Files copied into this sandbox');
     });
   });
 });
