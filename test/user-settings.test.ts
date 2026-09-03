@@ -76,6 +76,23 @@ describe('parseUserSettings', () => {
     expect(r.errors).toHaveLength(1);
   });
 
+  test('reads sbxSymlinkScanExcludeDirs', () => {
+    const r = parseUserSettings('{"sbxSymlinkScanExcludeDirs": ["coverage", ".turbo"]}');
+    expect(r.settings.sbxSymlinkScanExcludeDirs).toEqual(['coverage', '.turbo']);
+    expect(r.errors).toEqual([]);
+  });
+
+  test('non-array sbxSymlinkScanExcludeDirs is an error', () => {
+    const r = parseUserSettings('{"sbxSymlinkScanExcludeDirs": "coverage"}');
+    expect(r.errors).toHaveLength(1);
+    expect(r.errors[0]).toContain('"sbxSymlinkScanExcludeDirs" must be an array');
+  });
+
+  test('sbxSymlinkScanExcludeDirs with a non-string entry is an error', () => {
+    const r = parseUserSettings('{"sbxSymlinkScanExcludeDirs": ["coverage", 5]}');
+    expect(r.errors).toHaveLength(1);
+  });
+
   test('$schema is tolerated silently', () => {
     const r = parseUserSettings('{"$schema": "x", "checkRtk": true}');
     expect(r.warnings).toEqual([]);

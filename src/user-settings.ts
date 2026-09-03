@@ -20,6 +20,12 @@ export interface UserSettings {
    * there is no separate boolean; leave it unset to skip generation entirely.
    */
   claudeFragmentsDir?: string;
+  /**
+   * Extra directory names to skip (in addition to the fixed default set —
+   * node_modules, .git, dist, build, .next, target, vendor) when
+   * sbx-claude-code scans the project for symlinks pointing outside it.
+   */
+  sbxSymlinkScanExcludeDirs?: string[];
 }
 
 const DEFAULTS: UserSettings = { checkRtk: false };
@@ -76,8 +82,17 @@ export function parseUserSettings(content: string): ParsedUserSettings {
         continue;
       }
       settings.claudeFragmentsDir = value;
+    } else if (key === 'sbxSymlinkScanExcludeDirs') {
+      if (!Array.isArray(value) || !value.every((v) => typeof v === 'string' && v.trim() !== '')) {
+        errors.push(`"sbxSymlinkScanExcludeDirs" must be an array of non-empty strings, got ${JSON.stringify(value)}`);
+        continue;
+      }
+      settings.sbxSymlinkScanExcludeDirs = value;
     } else if (!IGNORED_KEYS.has(key)) {
-      warnings.push(`unrecognized key "${key}" — check for typos (known keys: checkRtk, claudeFragmentsDir)`);
+      warnings.push(
+        'unrecognized key "' + key + '" — check for typos ' +
+        '(known keys: checkRtk, claudeFragmentsDir, sbxSymlinkScanExcludeDirs)',
+      );
     }
   }
 

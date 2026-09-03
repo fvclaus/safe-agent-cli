@@ -298,6 +298,31 @@ describe('generateClaudeLocalMd', () => {
         .toThrow(/checkRtk is enabled but .*RTK\.md does not exist/);
     });
   });
+
+  test('appends a copied-symlink-paths notice last, when given', () => {
+    withTempDirs((fragmentsDir, repoRoot) => {
+      writeFileSync(join(fragmentsDir, 'a.md'), 'fragment rule\n');
+
+      const result = generateClaudeLocalMd(fragmentsDir, repoRoot, PROXY, undefined, ['/home/u/.secrets/env']);
+      expect(result.matchedCount).toBe(1); // the notice isn't counted as a fragment
+
+      const content = readFileSync(join(repoRoot, 'CLAUDE.local.md'), 'utf8');
+      expect(content).toContain('fragment rule');
+      expect(content).toContain('/home/u/.secrets/env');
+      expect(content).toContain('NOT synced back');
+      expect(content.indexOf('fragment rule')).toBeLessThan(content.indexOf('/home/u/.secrets/env'));
+    });
+  });
+
+  test('no notice section when copiedSymlinkPaths is empty or omitted', () => {
+    withTempDirs((fragmentsDir, repoRoot) => {
+      writeFileSync(join(fragmentsDir, 'a.md'), 'fragment rule\n');
+
+      generateClaudeLocalMd(fragmentsDir, repoRoot, PROXY, undefined, []);
+      const content = readFileSync(join(repoRoot, 'CLAUDE.local.md'), 'utf8');
+      expect(content).not.toContain('Files copied into this sandbox');
+    });
+  });
 });
 
 describe('expandHome', () => {
