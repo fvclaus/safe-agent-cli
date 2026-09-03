@@ -195,10 +195,10 @@ describe('generateClaudeLocalMd', () => {
       writeFileSync(join(fragmentsDir, 'z-not-md.txt'), 'ignored\n');
 
       const result = generateClaudeLocalMd(fragmentsDir, repoRoot, PROXY);
-      // +3 built-in fragments shipped in src/fragments (two github: true, one
-      // gcp: true — none match here since both integrations are off) counted in
-      // totalCount but not matchedCount.
-      expect(result.totalCount).toBe(5);
+      // +4 built-in fragments shipped in src/fragments (three github: true,
+      // one gcp: true — none match here since both integrations are off)
+      // counted in totalCount but not matchedCount.
+      expect(result.totalCount).toBe(6);
       expect(result.matchedCount).toBe(1);
       expect(result.rtkAppended).toBe(false);
 
