@@ -59,6 +59,16 @@ describe('parseFragment', () => {
       .toThrow(/"gcp" must be a boolean/);
   });
 
+  test('parses rtk as a boolean', () => {
+    expect(parseFragment('---\nrtk: true\n---\nbody\n', '/f/a.md').rtk).toBe(true);
+    expect(parseFragment('---\nrtk: false\n---\nbody\n', '/f/a.md').rtk).toBe(false);
+  });
+
+  test('a non-boolean rtk value throws', () => {
+    expect(() => parseFragment('---\nrtk: yes\n---\nbody\n', '/f/a.md'))
+      .toThrow(/"rtk" must be a boolean/);
+  });
+
   test('empty frontmatter yields an unconditioned fragment', () => {
     const f = parseFragment('---\n---\nbody\n', '/f/a.md');
     expect(f.org).toBeUndefined();
@@ -94,10 +104,10 @@ describe('parseFragment', () => {
 describe('fragmentMatches', () => {
   const base = { path: '/f/a.md', body: '' };
 
-  // Defaults githubMasked and gcp to false so callers only need to override the
-  // dimension they're actually testing.
+  // Defaults githubMasked, gcp and rtk to false so callers only need to override
+  // the dimension they're actually testing.
   function ctx(overrides: Partial<MatchContext> & Pick<MatchContext, 'org' | 'isolation' | 'github'>): MatchContext {
-    return { githubMasked: false, gcp: false, ...overrides };
+    return { githubMasked: false, gcp: false, rtk: false, ...overrides };
   }
 
   test('no conditions always matches', () => {
@@ -163,12 +173,24 @@ describe('fragmentMatches', () => {
     expect(fragmentMatches(f, ctx({ org: undefined, isolation: 'proxy', github: false, gcp: false }))).toBe(true);
     expect(fragmentMatches(f, ctx({ org: undefined, isolation: 'proxy', github: false, gcp: true }))).toBe(false);
   });
+
+  test('rtk: true only matches when the rtk hook is installed', () => {
+    const f = { ...base, rtk: true };
+    expect(fragmentMatches(f, ctx({ org: undefined, isolation: 'proxy', github: false, rtk: true }))).toBe(true);
+    expect(fragmentMatches(f, ctx({ org: undefined, isolation: 'proxy', github: false, rtk: false }))).toBe(false);
+  });
+
+  test('rtk: false only matches when the rtk hook is absent', () => {
+    const f = { ...base, rtk: false };
+    expect(fragmentMatches(f, ctx({ org: undefined, isolation: 'proxy', github: false, rtk: false }))).toBe(true);
+    expect(fragmentMatches(f, ctx({ org: undefined, isolation: 'proxy', github: false, rtk: true }))).toBe(false);
+  });
 });
 
 describe('generateClaudeLocalMd', () => {
   // A plain proxy launch with every integration off — tests override only the
   // dimension they exercise.
-  const PROXY: Omit<MatchContext, 'org'> = { isolation: 'proxy', github: false, githubMasked: false, gcp: false };
+  const PROXY: Omit<MatchContext, 'org'> = { isolation: 'proxy', github: false, githubMasked: false, gcp: false, rtk: false };
 
   function withTempDirs(run: (fragmentsDir: string, repoRoot: string) => void): void {
     const fragmentsDir = mkdtempSync(join(tmpdir(), 'fragments-'));
@@ -195,10 +217,10 @@ describe('generateClaudeLocalMd', () => {
       writeFileSync(join(fragmentsDir, 'z-not-md.txt'), 'ignored\n');
 
       const result = generateClaudeLocalMd(fragmentsDir, repoRoot, PROXY);
-      // +4 built-in fragments shipped in src/fragments (three github: true,
-      // one gcp: true — none match here since both integrations are off)
+      // +5 built-in fragments shipped in src/fragments (three github: true,
+      // one gcp: true, one rtk: true — none match here since all three are off)
       // counted in totalCount but not matchedCount.
-      expect(result.totalCount).toBe(6);
+      expect(result.totalCount).toBe(7);
       expect(result.matchedCount).toBe(1);
       expect(result.rtkAppended).toBe(false);
 
@@ -241,7 +263,28 @@ describe('generateClaudeLocalMd', () => {
       expect(content).not.toContain('git-sandboxed push origin main');
       expect(content).toContain('excludedCommands');
       expect(content).toContain('git -C');
+      expect(content).not.toContain('/usr/bin/git');
       expect(result.matchedCount).toBe(2);
+    });
+  });
+
+  test('the built-in rtk fragment only appears for proxy launches with the rtk hook installed', () => {
+    withTempDirs((fragmentsDir, repoRoot) => {
+      writeFileSync(join(fragmentsDir, 'a-user.md'), 'user rule\n');
+
+      const withoutRtk = generateClaudeLocalMd(fragmentsDir, repoRoot, PROXY);
+      expect(readFileSync(join(repoRoot, 'CLAUDE.local.md'), 'utf8')).not.toContain('rtk hook claude');
+      expect(withoutRtk.matchedCount).toBe(1);
+
+      const sbxWithRtk = generateClaudeLocalMd(fragmentsDir, repoRoot, { ...PROXY, isolation: 'sbx', rtk: true });
+      expect(readFileSync(join(repoRoot, 'CLAUDE.local.md'), 'utf8')).not.toContain('rtk hook claude');
+      expect(sbxWithRtk.matchedCount).toBe(1);
+
+      const withRtk = generateClaudeLocalMd(fragmentsDir, repoRoot, { ...PROXY, rtk: true });
+      const content = readFileSync(join(repoRoot, 'CLAUDE.local.md'), 'utf8');
+      expect(content).toContain('rtk hook claude');
+      expect(content).toContain('fragment: rtk-excluded-commands.md');
+      expect(withRtk.matchedCount).toBe(2);
     });
   });
 

@@ -31,6 +31,17 @@ export function hasRtkHook(settings: unknown): boolean {
   });
 }
 
+/** True when ~/.claude/settings.json installs the rtk PreToolUse hook. Malformed or missing settings count as not installed. */
+export function isRtkHookInstalled(home: string = homedir()): boolean {
+  const settingsPath = join(home, '.claude', 'settings.json');
+  if (!existsSync(settingsPath)) return false;
+  try {
+    return hasRtkHook(JSON.parse(readFileSync(settingsPath, 'utf8')));
+  } catch {
+    return false;
+  }
+}
+
 /**
  * Everything wrong with the local rtk install, from the `checkRtk` user
  * setting's point of view. Empty array means rtk is fully initialized.
@@ -50,15 +61,8 @@ export function rtkInitializationFailures(home: string = homedir()): string[] {
     failures.push('the `rtk` binary is not on PATH');
   }
 
-  const settingsPath = join(home, '.claude', 'settings.json');
-  let hookInstalled = false;
-  if (existsSync(settingsPath)) {
-    try {
-      hookInstalled = hasRtkHook(JSON.parse(readFileSync(settingsPath, 'utf8')));
-    } catch { /* malformed — treated as hook missing */ }
-  }
-  if (!hookInstalled) {
-    failures.push(`no PreToolUse hook "${RTK_HOOK_COMMAND}" in ${settingsPath}`);
+  if (!isRtkHookInstalled(home)) {
+    failures.push(`no PreToolUse hook "${RTK_HOOK_COMMAND}" in ${join(home, '.claude', 'settings.json')}`);
   }
 
   return failures;

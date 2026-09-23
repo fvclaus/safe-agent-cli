@@ -8,7 +8,7 @@ import { ensureClaudeSandboxSetting } from '../claude-sandbox-setting.js';
 import { mergeReadPaths, safeChainReadPaths } from '../safe-chain.js';
 import { loadUserSettings } from '../user-settings.js';
 import { expandHome, generateClaudeLocalMd, type MatchContext } from '../claude-fragments.js';
-import { missingRtkWritePaths, rtkInitializationFailures } from '../rtk.js';
+import { isRtkHookInstalled, missingRtkWritePaths, rtkInitializationFailures } from '../rtk.js';
 import { resolveRealBwrap } from '../real-bwrap.js';
 
 const log = (msg: string) => process.stderr.write(msg + '\n');
@@ -238,7 +238,7 @@ function warnIfGlobalClaudeMdExists(): void {
   }
 }
 
-interface SandboxSettingsFile {
+export interface SandboxSettingsFile {
   sandbox?: {
     credentials?: { envVars?: Array<{ name?: string; mode?: string }> };
     excludedCommands?: string[];
@@ -279,18 +279,10 @@ function isGithubTokenMasked(): boolean {
   );
 }
 
-// A bare 'git *' entry is confirmed unreliable — Claude Code's excludedCommands
-// matcher treats the literal token `git` specially/racily, so the same 'git *' entry
-// sometimes runs the command sandboxed anyway (see git-push-sandbox-debugging-transcript.md).
-// Only an absolute-path git exclusion (e.g. '/usr/bin/git *' on Linux,
-// '/opt/homebrew/bin/git *' on macOS) was reliable in testing. The exact path is
-// machine-specific, so match the shape rather than one literal string.
-const ABSOLUTE_GIT_EXCLUDED_COMMAND_RE = /^\S+\/git \*$/;
-
-function hasGitExcludedCommand(): boolean {
-  return readSandboxSettingsFiles().some(f =>
-    (f.sandbox?.excludedCommands ?? []).some(c => ABSOLUTE_GIT_EXCLUDED_COMMAND_RE.test(c)),
-  );
+// Plain `git …` needs a 'git *' exclusion, plus 'rtk git *' when the rtk hook rewrites it to `rtk git …`.
+export function missingGitExcludedCommands(files: SandboxSettingsFile[], rtk: boolean): string[] {
+  const entries = new Set(files.flatMap(f => f.sandbox?.excludedCommands ?? []));
+  return ['git *', ...(rtk ? ['rtk git *'] : [])].filter(e => !entries.has(e));
 }
 
 // git-sandboxed is always bind-mounted onto PATH when --gh is enabled (see
@@ -347,17 +339,19 @@ export const claudeCodeAdapter: AgentAdapter = {
     warnIfGlobalClaudeMdExists();
     const github = context.githubToken !== undefined;
     const githubMasked = github && isGithubTokenMasked();
+    const rtk = isRtkHookInstalled();
     if (github) {
-      if (githubMasked && !hasGitExcludedCommand()) {
+      const missingGitExclusions = githubMasked ? missingGitExcludedCommands(readSandboxSettingsFiles(), rtk) : [];
+      if (missingGitExclusions.length > 0) {
+        const rtkReason = missingGitExclusions.includes('rtk git *')
+          ? " ('rtk git *' because the rtk hook rewrites bare `git …` to `rtk git …`)"
+          : '';
         log(
           chalk.bold.red('ERROR:') +
-            ' GITHUB_TOKEN is masked in this sandbox (sandbox.credentials.envVars), and no absolute-path ' +
-            "git exclusion (e.g. '/usr/bin/git *') is in excludedCommands — the agent would have no " +
-            "working fallback for push, fetch, clone, or pull. A bare 'git *' entry is not enough — " +
-            "Claude Code's excludedCommands matcher treats the literal token `git` unreliably, so that " +
-            'entry sometimes runs the command sandboxed anyway. Add an absolute-path git exclusion (find ' +
-            'yours with `command -v git`) to excludedCommands in one of your settings.json files, or ' +
-            'remove the GITHUB_TOKEN mask entry.',
+            ' GITHUB_TOKEN is masked in this sandbox (sandbox.credentials.envVars), and excludedCommands lacks ' +
+            missingGitExclusions.map(e => `'${e}'`).join(' and ') + rtkReason +
+            ' — the agent would have no working fallback for push, fetch, clone, or pull. Add them to ' +
+            'excludedCommands in one of your settings.json files, or remove the GITHUB_TOKEN mask entry.',
         );
         process.exit(1);
       }
@@ -370,6 +364,7 @@ export const claudeCodeAdapter: AgentAdapter = {
         github,
         githubMasked,
         gcp: context.gcpToken !== undefined,
+        rtk,
       });
     }
     ensureClaudeStubDirs();

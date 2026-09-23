@@ -6,29 +6,16 @@ githubMasked: true
 ### Github / Git
 
 GITHUB_TOKEN is masked by Claude Code's own sandbox here — `git-sandboxed` cannot
-authenticate through it, so don't use it. This launch was only allowed to start
-because an absolute-path git exclusion is in `excludedCommands`, which means git
-invoked by that absolute path runs unsandboxed, with your real credentials.
+authenticate through it, so don't use it. Plain `git` runs unsandboxed with your
+real credentials instead: this launch was only allowed to start because `git *`
+(plus `rtk git *` when the rtk hook is installed) is in `excludedCommands`.
 
-**Never invoke bare `git`.** Claude Code's `excludedCommands` matcher treats the
-literal token `git` unreliably — the same command can run unsandboxed one call and
-sandboxed (failing to authenticate) the next, with no visible difference in what you
-typed. Resolve the absolute path once with `command -v git`, then always invoke git
-through that absolute path for the rest of this session:
+Two forms still run inside the sandbox, where remote operations fail with `Host key
+verification failed`:
 
-```bash
-command -v git
-# -> e.g. /usr/bin/git — use that exact path below, not "git"
-
-/usr/bin/git -C /absolute/path/to/repo push origin main
-/usr/bin/git -C /absolute/path/to/repo fetch origin
-/usr/bin/git -C /absolute/path/to/repo clone https://github.com/owner/repo.git
-```
-
-`cd <dir> && <absolute-path-to-git> push ...` also works — the absolute path is what
-matters, not whether the command is wrapped in `cd &&`. `-C <path>` is still the
-simpler default; reach for `cd &&` only when you already need the shell in that
-directory for something else in the same command.
+- `git -C <path> …` — `cd` into the repo in its own Bash call instead
+- chains such as `cd <dir> && git …` or `git … | …` — every part of a compound
+  command must match an exclusion
 
 The `gh` CLI already picks up `GITHUB_TOKEN` from the environment automatically —
 no `gh auth login` needed — and is unaffected by this, since it talks to

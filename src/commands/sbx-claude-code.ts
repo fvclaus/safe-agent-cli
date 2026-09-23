@@ -4,6 +4,7 @@ import { existsSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { expandHome, generateClaudeLocalMd } from '../claude-fragments.js';
+import { hasRtkHook } from '../rtk.js';
 import { ensureClaudeSandboxSetting } from '../claude-sandbox-setting.js';
 import { isGithubConfigured } from '../sbx/github-secret.js';
 import { requireGenericScript, resolveSandboxName, runGenericScript } from '../sbx/generic-script.js';
@@ -218,7 +219,7 @@ async function main(): Promise<void> {
     const result = generateClaudeLocalMd(
       dir,
       process.cwd(),
-      { isolation: 'sbx', github, githubMasked: false, gcp: false },
+      { isolation: 'sbx', github, githubMasked: false, gcp: false, rtk: hasRtkHook(settingsSbx.values) },
       rtkMdPath,
       symlinkPlan.fileCopies.map((c) => c.target),
     );

@@ -127,6 +127,9 @@ Rules that only apply in Developer-Akademie-GmbH repos.
   `github: true`.
 - `gcp` (boolean) matches whether the launch has `--gcp`/`--google-cloud`
   enabled.
+- `rtk` (boolean) matches whether the rtk PreToolUse hook (`rtk hook claude`)
+  is installed — in `~/.claude/settings.json` for `safe-claude-code`, in
+  `~/.claude/settings-sbx.json` for `sbx-claude-code`.
 - When a fragment sets more than one key, all of them must match (AND across
   keys). A key a fragment omits is a wildcard for that dimension; a fragment
   with no frontmatter at all always matches.

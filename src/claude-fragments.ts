@@ -11,8 +11,8 @@ const BUILTIN_FRAGMENTS_DIR = fileURLToPath(new URL('./fragments', import.meta.u
 
 // CLAUDE.local.md is generated from a personal library of markdown fragments,
 // each optionally scoped to a repo org, isolation mode, whether --gh/--github
-// is enabled, and/or whether GITHUB_TOKEN ends up masked by Claude Code's own
-// sandbox, via YAML frontmatter. See the design discussion this implements:
+// is enabled, whether GITHUB_TOKEN ends up masked by Claude Code's own
+// sandbox, and/or whether the rtk hook is installed, via YAML frontmatter. See the design discussion this implements:
 // matching is AND across frontmatter keys, OR within a key's list, a missing
 // key is a wildcard for that dimension, and no frontmatter at all means
 // "always included". Any malformed fragment aborts generation — this feature
@@ -35,6 +35,8 @@ export interface Fragment {
   githubMasked?: boolean;
   /** Whether `--gcp`/`--google-cloud` must be enabled (true) or disabled (false) for this fragment to match. Absent = wildcard. */
   gcp?: boolean;
+  /** Whether the rtk PreToolUse hook must be installed (true) or absent (false) for this fragment to match. Absent = wildcard. */
+  rtk?: boolean;
   body: string;
 }
 
@@ -48,10 +50,12 @@ export interface MatchContext {
   githubMasked: boolean;
   /** Whether `--gcp`/`--google-cloud` is enabled for this launch. */
   gcp: boolean;
+  /** Whether this session's Bash commands pass through the rtk PreToolUse hook, which rewrites e.g. `git …` to `rtk git …`. */
+  rtk: boolean;
 }
 
 const FRONTMATTER_RE = /^---\r?\n([\s\S]*?)\r?\n---\r?\n?([\s\S]*)$/;
-const KNOWN_FRONTMATTER_KEYS = new Set(['org', 'isolation', 'github', 'githubMasked', 'gcp']);
+const KNOWN_FRONTMATTER_KEYS = new Set(['org', 'isolation', 'github', 'githubMasked', 'gcp', 'rtk']);
 
 function toStringList(value: unknown, key: string, path: string): string[] {
   if (typeof value === 'string') return [value];
@@ -87,7 +91,7 @@ export function parseFragment(content: string, path: string): Fragment {
   const obj = raw as Record<string, unknown>;
   for (const key of Object.keys(obj)) {
     if (!KNOWN_FRONTMATTER_KEYS.has(key)) {
-      throw new Error(`${path}: unrecognized frontmatter key "${key}" (known keys: org, isolation, github, githubMasked, gcp)`);
+      throw new Error(`${path}: unrecognized frontmatter key "${key}" (known keys: org, isolation, github, githubMasked, gcp, rtk)`);
     }
   }
 
@@ -98,8 +102,9 @@ export function parseFragment(content: string, path: string): Fragment {
   const github = 'github' in obj ? { github: toBoolean(obj['github'], 'github', path) } : {};
   const githubMasked = 'githubMasked' in obj ? { githubMasked: toBoolean(obj['githubMasked'], 'githubMasked', path) } : {};
   const gcp = 'gcp' in obj ? { gcp: toBoolean(obj['gcp'], 'gcp', path) } : {};
+  const rtk = 'rtk' in obj ? { rtk: toBoolean(obj['rtk'], 'rtk', path) } : {};
 
-  return { path, ...org, ...isolation, ...github, ...githubMasked, ...gcp, body };
+  return { path, ...org, ...isolation, ...github, ...githubMasked, ...gcp, ...rtk, body };
 }
 
 function matchesList(list: string[] | undefined, value: string | undefined, caseInsensitive: boolean): boolean {
@@ -116,7 +121,8 @@ export function fragmentMatches(fragment: Fragment, context: MatchContext): bool
     matchesList(fragment.isolation, context.isolation, false) &&
     (fragment.github === undefined || fragment.github === context.github) &&
     (fragment.githubMasked === undefined || fragment.githubMasked === context.githubMasked) &&
-    (fragment.gcp === undefined || fragment.gcp === context.gcp)
+    (fragment.gcp === undefined || fragment.gcp === context.gcp) &&
+    (fragment.rtk === undefined || fragment.rtk === context.rtk)
   );
 }
 
