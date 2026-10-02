@@ -4,8 +4,10 @@ import { existsSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { expandHome, generateClaudeLocalMd } from '../claude-fragments.js';
+import { isGitRepo, missingMandatoryGithub } from '../git-remote.js';
 import { hasRtkHook } from '../rtk.js';
 import { ensureClaudeSandboxSetting } from '../claude-sandbox-setting.js';
+import { ensureDefaultModelEffortLevels } from '../default-model-effort.js';
 import { isGithubConfigured } from '../sbx/github-secret.js';
 import { requireGenericScript, resolveSandboxName, runGenericScript } from '../sbx/generic-script.js';
 import { syncSkillsIntoSandbox } from '../sbx/copy-skills.js';
@@ -153,6 +155,11 @@ async function main(): Promise<void> {
   const github = isGithubConfigured(sandboxName);
   log(chalk.bold.green('OK:') + ` github: ${github ? 'configured (sbx secret)' : 'not configured'}`);
 
+  if (missingMandatoryGithub(github, isGitRepo())) {
+    log(chalk.bold.red('ERROR:') + ' this directory is a git repository; configure it with `sbx secret set github`.');
+    process.exit(1);
+  }
+
   // sbx-claude-code doesn't wire up --gcp yet, so this is always false here.
   acquireSessionLock(process.cwd(), { agent: 'claude', isolation: 'sbx', github, gcp: false });
   process.on('exit', releaseSessionLock);
@@ -166,6 +173,7 @@ async function main(): Promise<void> {
   // directory into the sandbox at the same path, so this is the same file
   // Claude Code reads once launched inside the container.
   ensureClaudeSandboxSetting(false, log);
+  ensureDefaultModelEffortLevels(log);
 
   const settingsSbxPath = join(homedir(), '.claude', 'settings-sbx.json');
   const settingsSbx = loadSettingsSbx(settingsSbxPath);
