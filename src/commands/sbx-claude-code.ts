@@ -6,6 +6,7 @@ import { join } from 'node:path';
 import { expandHome, generateClaudeLocalMd } from '../claude-fragments.js';
 import { hasRtkHook } from '../rtk.js';
 import { ensureClaudeSandboxSetting } from '../claude-sandbox-setting.js';
+import { ensureDefaultModelEffortLevels } from '../default-model-effort.js';
 import { isGithubConfigured } from '../sbx/github-secret.js';
 import { requireGenericScript, resolveSandboxName, runGenericScript } from '../sbx/generic-script.js';
 import { syncSkillsIntoSandbox } from '../sbx/copy-skills.js';
@@ -166,6 +167,7 @@ async function main(): Promise<void> {
   // directory into the sandbox at the same path, so this is the same file
   // Claude Code reads once launched inside the container.
   ensureClaudeSandboxSetting(false, log);
+  ensureDefaultModelEffortLevels(log);
 
   const settingsSbxPath = join(homedir(), '.claude', 'settings-sbx.json');
   const settingsSbx = loadSettingsSbx(settingsSbxPath);

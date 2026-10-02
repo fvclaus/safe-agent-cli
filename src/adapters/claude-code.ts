@@ -5,6 +5,7 @@ import { homedir } from 'node:os';
 import { fileURLToPath } from 'node:url';
 import type { AgentAdapter } from '../launcher/safe-agent-cli.js';
 import { ensureClaudeSandboxSetting } from '../claude-sandbox-setting.js';
+import { ensureDefaultModelEffortLevels } from '../default-model-effort.js';
 import { mergeReadPaths, safeChainReadPaths } from '../safe-chain.js';
 import { loadUserSettings } from '../user-settings.js';
 import { expandHome, generateClaudeLocalMd, type MatchContext } from '../claude-fragments.js';
@@ -370,6 +371,7 @@ export const claudeCodeAdapter: AgentAdapter = {
     ensureClaudeStubDirs();
     ensureGitignoreStubs();
     ensureClaudeSandboxSetting(true, log);
+    ensureDefaultModelEffortLevels(log);
     ensureProjectSettingsJson();
     ensureUserSafeChainReadAccess();
   },
