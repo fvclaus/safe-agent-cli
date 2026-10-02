@@ -13,6 +13,7 @@ import { gcpCliOptions, setupGcpIntegration } from '../integrations/gcp.js';
 import type { GithubCliArgs } from '../integrations/github.js';
 import { githubCliOptions, setupGithubIntegration } from '../integrations/github.js';
 import { checkSensitiveEnv } from '../env-check.js';
+import { isGitRepo, missingMandatoryGithub } from '../git-remote.js';
 import { acquireSessionLock, releaseSessionLock } from '../session-lock.js';
 
 const log = (msg: string) => process.stderr.write(msg + '\n');
@@ -117,8 +118,7 @@ function isSnap(binary: string): boolean {
 }
 
 function checkOriginHead(): void {
-  const gitCheck = spawnSync('git', ['rev-parse', '--git-dir'], { encoding: 'utf8' });
-  if (gitCheck.status !== 0) return;
+  if (!isGitRepo()) return;
 
   const lsRemote = spawnSync('git', ['ls-remote', '--symref', 'origin', 'HEAD'], {
     encoding: 'utf8',
@@ -197,7 +197,30 @@ export interface AgentAdapter {
   buildSpawnEnv?: (context: SafeAgentLaunchContext) => NodeJS.ProcessEnv;
 }
 
+// optique's own --help handling loses to the greedy `rest` passThrough (a
+// full parse that forwards --help as just another rest arg outcompetes
+// optique's lenient help-only parse), so --help is never actually shown —
+// it silently launches and forwards --help to the underlying agent binary
+// instead. Short-circuit explicitly before anything else runs.
+function printHelpAndExit(adapter: AgentAdapter): never {
+  log(adapter.brief);
+  log('');
+  log(`Usage: ${adapter.programName} [--gh | --github [PAT_NAME]] [--gcp | --google-cloud] [--project <id>] [--service-account <name>] [-- ...]`);
+  log('');
+  log('  --gh, --github [PAT_NAME]     Enable GitHub CLI integration (required when the');
+  log('                                current directory is a git repository).');
+  log('  --gcp, --google-cloud         Enable GCP integration.');
+  log('  --project <id>                GCP project id, used with --gcp/--google-cloud.');
+  log('  --service-account <name>      GCP service account to impersonate.');
+  log(`  Extra arguments are forwarded to ${adapter.forwardedArgsTarget}.`);
+  process.exit(0);
+}
+
 export async function runSafeAgentCli(adapter: AgentAdapter): Promise<void> {
+  if (process.argv.slice(2).some((a) => a === '--help' || a === '-h')) {
+    printHelpAndExit(adapter);
+  }
+
   abortIfSnap('uv', 'https://docs.astral.sh/uv/getting-started/installation/');
   const args = await run(
     object({
@@ -212,6 +235,11 @@ export async function runSafeAgentCli(adapter: AgentAdapter): Promise<void> {
       brief: message`${adapter.brief}`,
     },
   );
+
+  if (missingMandatoryGithub(args.gh !== undefined || args.github !== undefined, isGitRepo())) {
+    log(chalk.bold.red('ERROR:') + ' this directory is a git repository; --gh/--github is required.');
+    process.exit(1);
+  }
 
   const github = await setupGithubIntegration({ args, log, abortIfSnap });
   const gcp = await setupGcpIntegration({

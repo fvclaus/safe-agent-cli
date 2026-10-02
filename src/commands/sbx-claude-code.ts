@@ -4,6 +4,7 @@ import { existsSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { expandHome, generateClaudeLocalMd } from '../claude-fragments.js';
+import { isGitRepo, missingMandatoryGithub } from '../git-remote.js';
 import { hasRtkHook } from '../rtk.js';
 import { ensureClaudeSandboxSetting } from '../claude-sandbox-setting.js';
 import { ensureDefaultModelEffortLevels } from '../default-model-effort.js';
@@ -153,6 +154,11 @@ async function main(): Promise<void> {
   // "github" service secret is configured for this sandbox.
   const github = isGithubConfigured(sandboxName);
   log(chalk.bold.green('OK:') + ` github: ${github ? 'configured (sbx secret)' : 'not configured'}`);
+
+  if (missingMandatoryGithub(github, isGitRepo())) {
+    log(chalk.bold.red('ERROR:') + ' this directory is a git repository; configure it with `sbx secret set github`.');
+    process.exit(1);
+  }
 
   // sbx-claude-code doesn't wire up --gcp yet, so this is always false here.
   acquireSessionLock(process.cwd(), { agent: 'claude', isolation: 'sbx', github, gcp: false });
