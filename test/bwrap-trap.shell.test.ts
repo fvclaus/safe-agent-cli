@@ -1,5 +1,5 @@
 /**
- * Regression coverage for NEW_TRAP against real shells.
+ * Regression coverage for the trap rewrite against real shells.
  *
  * The pure-function tests in bwrap-transform.test.ts only check that NEW_TRAP is
  * the expected string — they can't catch a wrong backslash count, since a wrong
@@ -9,31 +9,67 @@
  * and a "bad math expression" parse error under zsh. These tests catch that
  * class of bug by actually installing the trap in a real shell and checking the
  * exit code that comes out.
+ *
+ * They also run the whole transform over the trap current Claude Code installs
+ * itself, so a match that is too loose (rewriting the `kill …; exit` inside an
+ * already-fixed trap into `exit \$rc $rc`) fails here instead of breaking every
+ * sandboxed command.
  */
 import { spawnSync } from 'node:child_process';
 import { describe, expect, test } from 'bun:test';
-import { NEW_TRAP, OLD_TRAP } from '../src/bin/bwrap-transform.js';
+import {
+  NEW_TRAP,
+  OLD_TRAP,
+  stripUnshareNetAndFixTrap,
+  UPSTREAM_FIXED_TRAP,
+} from '../src/bin/bwrap-transform.js';
 
 function hasShell(shell: string): boolean {
   return spawnSync(shell, ['-c', 'true']).status === 0;
 }
 
-/** Installs `trap` as an EXIT trap around `cmd`, mirroring the harness's real
- * layout: two backgrounded jobs (%1 %2) the trap kills on exit. */
-function runWithTrap(shell: string, trap: string, cmd: string): number | null {
-  const script = `sleep 5 &\nsleep 5 &\ntrap "${trap}" EXIT\n${cmd}`;
+/** Runs `trapLine` as the EXIT-trap line of a script around `cmd`, mirroring the
+ * harness's real layout: two backgrounded jobs (%1 %2) the trap kills on exit. */
+function runWithTrapLine(shell: string, trapLine: string, cmd: string): number | null {
+  const script = `sleep 5 &\nsleep 5 &\n${trapLine}\n${cmd}`;
   return spawnSync(shell, ['-c', script]).status;
+}
+
+/** Same, but through the outer `shell -c '<script>'` layer the harness wraps the
+ * script in, with the script transformed by the shim first. */
+function runNestedThroughShim(shell: string, trapLine: string, cmd: string): number | null {
+  const script = `sleep 5 &\nsleep 5 &\n${trapLine}\n${cmd}`;
+  const outer = `${shell} -c '${script.split("'").join(`'"'"'`)}'`;
+  const [transformed] = stripUnshareNetAndFixTrap([outer]);
+  return spawnSync(shell, ['-c', transformed!]).status;
 }
 
 const SHELLS = ['bash', 'zsh'].filter(hasShell);
 
 describe.each(SHELLS)('NEW_TRAP under %s -c', (shell) => {
-  test('preserves a failing command\'s exit code', () => {
-    expect(runWithTrap(shell, NEW_TRAP, 'false')).toBe(1);
+  test("preserves a failing command's exit code", () => {
+    expect(runWithTrapLine(shell, NEW_TRAP, 'false')).toBe(1);
   });
 
   test("preserves a passing command's exit code", () => {
-    expect(runWithTrap(shell, NEW_TRAP, 'true')).toBe(0);
+    expect(runWithTrapLine(shell, NEW_TRAP, 'true')).toBe(0);
+  });
+
+  test('transformed old trap preserves exit codes through the outer -c layer', () => {
+    expect(runNestedThroughShim(shell, OLD_TRAP, 'false')).toBe(1);
+    expect(runNestedThroughShim(shell, OLD_TRAP, 'true')).toBe(0);
+  });
+});
+
+describe.each(SHELLS)('upstream-fixed trap under %s -c', (shell) => {
+  test('preserves exit codes on its own', () => {
+    expect(runWithTrapLine(shell, UPSTREAM_FIXED_TRAP, 'false')).toBe(1);
+    expect(runWithTrapLine(shell, UPSTREAM_FIXED_TRAP, 'true')).toBe(0);
+  });
+
+  test('still preserves exit codes after passing through the shim transform', () => {
+    expect(runNestedThroughShim(shell, UPSTREAM_FIXED_TRAP, 'false')).toBe(1);
+    expect(runNestedThroughShim(shell, UPSTREAM_FIXED_TRAP, 'true')).toBe(0);
   });
 });
 
@@ -42,6 +78,6 @@ describe.each(SHELLS)('NEW_TRAP under %s -c', (shell) => {
 test.skipIf(!hasShell('zsh'))(
   'regression: bare OLD_TRAP loses the real exit code under zsh',
   () => {
-    expect(runWithTrap('zsh', OLD_TRAP, 'false')).toBe(0);
+    expect(runWithTrapLine('zsh', OLD_TRAP, 'false')).toBe(0);
   },
 );

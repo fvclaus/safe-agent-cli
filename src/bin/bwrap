@@ -10,7 +10,8 @@
  *
  *   1. Strip `--unshare-net` so the sandbox shares the host network namespace,
  *      making processes the agent starts (e.g. a dev server) reachable.
- *   2. Fix Claude Code's proxy-cleanup trap so it preserves the real exit code.
+ *   2. Fix older Claude Code versions' proxy-cleanup trap so it preserves the
+ *      real exit code (current versions ship the fix; theirs is left alone).
  *   3. Inject the missing gitdir binds when the project is a git worktree.
  *   4. Honor `sandbox.filesystem.allowWrite` from the Claude settings files,
  *      overriding the harness's hardcoded .claude/.git/dotfile deny wall.

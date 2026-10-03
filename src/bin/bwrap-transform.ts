@@ -7,22 +7,33 @@
  */
 import { dirname, join } from 'node:path';
 
-// Claude Code wraps each sandboxed command with a proxy-cleanup trap:
+// Older Claude Code versions wrap each sandboxed command with a proxy-cleanup trap:
 //     trap "kill %1 %2 2>/dev/null; exit" EXIT
 // Under zsh a bare `exit` in a trap takes the status of the trap's last command
 // (the `kill`), so the command's real exit code is lost — verified directly:
 // `zsh -c 'trap "kill %1 %2 2>/dev/null; exit" EXIT; false'` reports 0, not 1.
 // Rewrite it to capture $? first. Exactly one backslash before each `$` is what
-// survives the single `zsh -c '...'` / `bash -c '...'` layer the harness actually
-// uses, so $?/$rc expand at trap-fire time rather than when the trap is
-// installed — verified against both `zsh -c` and `bash -c` directly; the fix is
+// survives the `zsh -c '...'` / `bash -c '...'` layers the harness uses, so
+// $?/$rc expand at trap-fire time rather than when the trap is installed —
+// verified against both `zsh -c` and `bash -c` directly; the fix is
 // shell-agnostic and a no-op risk-free under bash, which doesn't have this bug.
-export const OLD_TRAP = 'kill %1 %2 2>/dev/null; exit';
-export const NEW_TRAP = 'rc=\\$?; kill %1 %2 2>/dev/null; exit \\$rc';
+//
+// Current Claude Code versions ship the fix themselves, single-quoted:
+//     trap 'rc=$?; kill %1 %2 2>/dev/null; exit $rc' EXIT
+// The match is therefore anchored on the whole double-quoted `trap "..." EXIT`
+// form. Matching the bare `kill … ; exit` substring would also hit the fixed
+// trap and turn it into `exit \$rc $rc` — inside single quotes `\$rc` stays
+// literal, so zsh fails with "exit: too many arguments" and bash with
+// "exit: $rc: numeric argument required" on every sandboxed command.
+export const OLD_TRAP = 'trap "kill %1 %2 2>/dev/null; exit" EXIT';
+export const NEW_TRAP = 'trap "rc=\\$?; kill %1 %2 2>/dev/null; exit \\$rc" EXIT';
+/** The trap current Claude Code versions install themselves; left untouched. */
+export const UPSTREAM_FIXED_TRAP = "trap 'rc=$?; kill %1 %2 2>/dev/null; exit $rc' EXIT";
 
 /**
  * Step 1: drop `--unshare-net` (so the sandbox shares the host network
- * namespace) and rewrite the exit-code-eating trap in every argument.
+ * namespace) and rewrite the exit-code-eating trap in every argument. An
+ * argument carrying the upstream-fixed trap is passed through unchanged.
  */
 export function stripUnshareNetAndFixTrap(argv: readonly string[]): string[] {
   const out: string[] = [];

@@ -10,6 +10,7 @@ import {
   resolveSettingsPath,
   stripDenyWall,
   stripUnshareNetAndFixTrap,
+  UPSTREAM_FIXED_TRAP,
   type WorktreeProbe,
 } from '../src/bin/bwrap-transform.js';
 
@@ -24,8 +25,8 @@ describe('stripUnshareNetAndFixTrap', () => {
   });
 
   test('rewrites the trap so the real exit code is captured', () => {
-    const arg = `socat &\ntrap "${OLD_TRAP}" EXIT`;
-    expect(stripUnshareNetAndFixTrap([arg])).toEqual([`socat &\ntrap "${NEW_TRAP}" EXIT`]);
+    const arg = `socat &\n${OLD_TRAP}\ncmd`;
+    expect(stripUnshareNetAndFixTrap([arg])).toEqual([`socat &\n${NEW_TRAP}\ncmd`]);
   });
 
   test('applies the trap rewrite exactly once (no doubling)', () => {
@@ -34,12 +35,27 @@ describe('stripUnshareNetAndFixTrap', () => {
     expect(out!.match(/rc=/g)).toHaveLength(1);
   });
 
+  test('leaves the upstream-fixed single-quoted trap untouched', () => {
+    // Current Claude Code already captures $? itself. Rewriting the `kill …; exit`
+    // inside it would yield `exit \$rc $rc`: zsh "exit: too many arguments",
+    // bash "exit: $rc: numeric argument required", on every sandboxed command.
+    const arg = `socat &\n${UPSTREAM_FIXED_TRAP}\ncmd`;
+    expect(stripUnshareNetAndFixTrap([arg])).toEqual([arg]);
+  });
+
+  test('leaves the upstream-fixed trap untouched when nested in an outer -c layer', () => {
+    // The harness passes `zsh -c '<script>'` as a single bwrap argument, so the
+    // inner single quotes arrive as the '"'"' escape sequence.
+    const nested = `/usr/bin/zsh -c '${UPSTREAM_FIXED_TRAP.split("'").join(`'"'"'`)}'`;
+    expect(stripUnshareNetAndFixTrap([nested])).toEqual([nested]);
+  });
+
   test('NEW_TRAP carries exactly one backslash before each $', () => {
     // Verified directly against real `zsh -c` and `bash -c`: one backslash is
-    // what survives the single -c '...' layer the harness actually uses, and
-    // fixes the exit-code bug (zsh: 0 -> 1 for a failing command) without
-    // affecting bash, which never had the bug.
-    expect(NEW_TRAP).toBe('rc=\\$?; kill %1 %2 2>/dev/null; exit \\$rc');
+    // what survives the -c '...' layers the harness uses, and fixes the
+    // exit-code bug (zsh: 0 -> 1 for a failing command) without affecting
+    // bash, which never had the bug.
+    expect(NEW_TRAP).toBe('trap "rc=\\$?; kill %1 %2 2>/dev/null; exit \\$rc" EXIT');
     expect(NEW_TRAP.match(/\\/g)).toHaveLength(2);
   });
 
