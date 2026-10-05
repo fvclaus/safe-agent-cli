@@ -2,7 +2,6 @@
 import React, { useState, useMemo } from 'react';
 import { render, Box, Text, useApp, useInput } from 'ink';
 import { object } from '@optique/core/constructs';
-import { passThrough } from '@optique/core/primitives';
 import { message } from '@optique/core/message';
 import { run } from '@optique/run';
 import chalk from 'chalk';
@@ -197,11 +196,8 @@ export interface AgentAdapter {
   buildSpawnEnv?: (context: SafeAgentLaunchContext) => NodeJS.ProcessEnv;
 }
 
-// optique's own --help handling loses to the greedy `rest` passThrough (a
-// full parse that forwards --help as just another rest arg outcompetes
-// optique's lenient help-only parse), so --help is never actually shown —
-// it silently launches and forwards --help to the underlying agent binary
-// instead. Short-circuit explicitly before anything else runs.
+// --help/-h before `--` prints this launcher's own help; after `--` it is
+// forwarded to the agent like any other argument.
 function printHelpAndExit(adapter: AgentAdapter): never {
   log(adapter.brief);
   log('');
@@ -212,29 +208,42 @@ function printHelpAndExit(adapter: AgentAdapter): never {
   log('  --gcp, --google-cloud         Enable GCP integration.');
   log('  --project <id>                GCP project id, used with --gcp/--google-cloud.');
   log('  --service-account <name>      GCP service account to impersonate.');
-  log(`  Extra arguments are forwarded to ${adapter.forwardedArgsTarget}.`);
+  log(`  -- ...                        Everything after '--' is forwarded to ${adapter.forwardedArgsTarget}.`);
+  log('                                Unknown switches before \'--\' are an error.');
   process.exit(0);
 }
 
+// Only arguments after the first `--` are forwarded to the agent. Everything
+// before it is parsed strictly, so an unknown switch (e.g. a typo like
+// `--gcpp`) or a switch missing its value (e.g. a bare `--project`) is an
+// error instead of being silently forwarded.
+function splitAtSeparator(argv: string[]): { ownArgv: string[]; rest: string[] } {
+  const separator = argv.indexOf('--');
+  return separator === -1
+    ? { ownArgv: argv, rest: [] }
+    : { ownArgv: argv.slice(0, separator), rest: argv.slice(separator + 1) };
+}
+
 export async function runSafeAgentCli(adapter: AgentAdapter): Promise<void> {
-  if (process.argv.slice(2).some((a) => a === '--help' || a === '-h')) {
+  const { ownArgv, rest } = splitAtSeparator(process.argv.slice(2));
+  if (ownArgv.some((a) => a === '--help' || a === '-h')) {
     printHelpAndExit(adapter);
   }
 
   abortIfSnap('uv', 'https://docs.astral.sh/uv/getting-started/installation/');
-  const args = await run(
+  const parsed = await run(
     object({
       ...gcpCliOptions,
       ...githubCliOptions,
-      rest:        passThrough({ format: 'greedy', description: message`Extra arguments forwarded to ${adapter.forwardedArgsTarget}.` }),
     }),
     {
       programName: adapter.programName,
-      help: 'option',
+      args: ownArgv,
       colors: true,
       brief: message`${adapter.brief}`,
     },
   );
+  const args: ParsedArgs = { ...parsed, rest };
 
   if (missingMandatoryGithub(args.gh !== undefined || args.github !== undefined, isGitRepo())) {
     log(chalk.bold.red('ERROR:') + ' this directory is a git repository; --gh/--github is required.');
