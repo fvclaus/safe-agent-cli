@@ -7,6 +7,7 @@ import { expandHome, generateClaudeLocalMd } from '../claude-fragments.js';
 import { isGitRepo, missingMandatoryGithub } from '../git-remote.js';
 import { hasRtkHook } from '../rtk.js';
 import { ensureClaudeSandboxSetting } from '../claude-sandbox-setting.js';
+import { claudeSettingsPaths, SKIP_SETTINGS_SCHEMA_FLAG, verifyClaudeSettingsOrExit } from '../claude-settings-validation.js';
 import { ensureDefaultModelEffortLevels } from '../default-model-effort.js';
 import { isGithubConfigured } from '../sbx/github-secret.js';
 import { requireGenericScript, resolveSandboxName, runGenericScript } from '../sbx/generic-script.js';
@@ -24,12 +25,13 @@ const log = (msg: string) => {
 
 interface Args {
   genericScript?: string;
+  skipSettingsSchema: boolean;
   /** Everything after `--`: the launch command handed to the generic script verbatim. */
   launchCommand: string[];
 }
 
 function parseArgs(argv: string[]): Args {
-  const args: Args = { launchCommand: [] };
+  const args: Args = { skipSettingsSchema: false, launchCommand: [] };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     // Everything past the first `--` belongs to the generic script, not us —
@@ -43,6 +45,8 @@ function parseArgs(argv: string[]): Args {
       if (value !== undefined) args.genericScript = value;
     } else if (a?.startsWith('--generic-script=')) {
       args.genericScript = a.slice('--generic-script='.length);
+    } else if (a === SKIP_SETTINGS_SCHEMA_FLAG) {
+      args.skipSettingsSchema = true;
     } else if (a === '--help' || a === '-h') {
       printHelp();
       process.exit(0);
@@ -59,7 +63,7 @@ function parseArgs(argv: string[]): Args {
 }
 
 function printHelp(): void {
-  process.stdout.write(`Usage: sbx-claude-code --generic-script <path> -- <command...>
+  process.stdout.write(`Usage: sbx-claude-code --generic-script <path> [--skip-settings-schema] -- <command...>
 
 Runs Claude Code inside an sbx (Docker Sandboxes) sandbox, wiring up
 user-authored hooks (e.g. desktop notifications relayed to the host) that the
@@ -87,6 +91,15 @@ Required:
                              use '-- run --clone', NOT '-- clone' — a bare
                              command name does not propagate, so the sandbox
                              that gets prepared would not be the one launched.
+
+Optional:
+  --skip-settings-schema    Skip validating the Claude settings files below
+                             against the schemastore schema (fetched live on
+                             every launch). JSON syntax is still checked.
+
+Validates (hard error on invalid JSON, a schema violation, or a failed
+schema fetch) ~/.claude/settings.json, the project's .claude/settings.json
+and .claude/settings.local.json, and ~/.claude/settings-sbx.json.
 
 Reads (required, hard error if missing or malformed):
   ~/.claude/settings-sbx.json   User-authored settings.json overlay: every key
@@ -136,6 +149,9 @@ async function main(): Promise<void> {
     );
   }
 
+  const settingsSbxPath = join(homedir(), '.claude', 'settings-sbx.json');
+  await verifyClaudeSettingsOrExit([...claudeSettingsPaths(), settingsSbxPath], args.skipSettingsSchema, log);
+
   // The first token is the launch command's own name — the script's business,
   // and meaningless to `build` / `resolve-name`. Everything after it may change
   // WHICH sandbox is meant (e.g. claude-generic.sh's --clone changes the
@@ -175,7 +191,6 @@ async function main(): Promise<void> {
   ensureClaudeSandboxSetting(false, log);
   ensureDefaultModelEffortLevels(log);
 
-  const settingsSbxPath = join(homedir(), '.claude', 'settings-sbx.json');
   const settingsSbx = loadSettingsSbx(settingsSbxPath);
   log(chalk.bold.green('OK:') + ` loaded ${settingsSbxPath}`);
 

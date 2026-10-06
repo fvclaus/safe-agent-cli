@@ -106,6 +106,27 @@ again inside the already-isolated sbx container is redundant and can conflict. T
 file, bind-mounted into the sandbox by the generic script, not a file that needs reconstructing
 inside the container.
 
+## Settings validation
+
+Every Claude launch path (bwrap and sbx) runs `verifyClaudeSettingsOrExit`
+([src/claude-settings-validation.ts](src/claude-settings-validation.ts)) before
+anything else touches the settings files. It checks `~/.claude/settings.json`,
+the project's `.claude/settings.json` and `.claude/settings.local.json` — plus
+`~/.claude/settings-sbx.json` under `sbx-claude-code` — for JSON syntax and
+against the schemastore schema (`https://json.schemastore.org/claude-code-settings.json`),
+fetched live on every launch. Strict by default: a syntax error, a schema
+violation, or a failed schema fetch aborts the launch. `--skip-settings-schema`
+skips the schema step entirely (no fetch; syntax still checked) — the way out
+when offline or when schemastore lags behind a new Claude Code setting. There is
+no ignore list. `safe-codex` doesn't read Claude settings and has no such check.
+
+Adapter-only boolean switches like this one are declared via `AgentAdapter.flags`
+rather than in the shared launcher's option set.
+
+Tests run offline against a checked-in copy of the schema,
+[test/fixtures/claude-code-settings.schema.json](test/fixtures/claude-code-settings.schema.json);
+refresh it by hand.
+
 ## IMPORTANT: Testing changes
 
 **You are running without the real agent sandbox. You MUST test every change before reporting it as complete.**

@@ -5,6 +5,7 @@ import { homedir } from 'node:os';
 import { fileURLToPath } from 'node:url';
 import type { AgentAdapter } from '../launcher/safe-agent-cli.js';
 import { ensureClaudeSandboxSetting } from '../claude-sandbox-setting.js';
+import { claudeSettingsPaths, SKIP_SETTINGS_SCHEMA_FLAG, verifyClaudeSettingsOrExit } from '../claude-settings-validation.js';
 import { ensureDefaultModelEffortLevels } from '../default-model-effort.js';
 import { mergeReadPaths, safeChainReadPaths } from '../safe-chain.js';
 import { loadUserSettings } from '../user-settings.js';
@@ -13,28 +14,6 @@ import { isRtkHookInstalled, missingRtkWritePaths, rtkInitializationFailures } f
 import { resolveRealBwrap } from '../real-bwrap.js';
 
 const log = (msg: string) => process.stderr.write(msg + '\n');
-
-function verifyClaudeSettingsJson(): void {
-  const paths = [
-    join(homedir(), '.claude', 'settings.json'),
-    join(process.cwd(), '.claude', 'settings.json'),
-    join(process.cwd(), '.claude', 'settings.local.json'),
-  ];
-
-  let hasError = false;
-  for (const p of paths) {
-    if (!existsSync(p)) continue;
-    try {
-      JSON.parse(readFileSync(p, 'utf8'));
-    } catch (e) {
-      const msg = e instanceof Error ? e.message : String(e);
-      log(chalk.bold.red('ERROR:') + ` ${p} contains invalid JSON: ${msg}`);
-      log('Claude Code silently ignores malformed settings files — fix it before launching.');
-      hasError = true;
-    }
-  }
-  if (hasError) process.exit(1);
-}
 
 // Claude Code's sandbox masks these .claude/ subdirectories (they're on its
 // denyWithinAllow list). When a path doesn't exist on disk, bwrap has to
@@ -248,17 +227,12 @@ export interface SandboxSettingsFile {
 
 // Same 3 files, same union-across-all approach as the bwrap shim's allowWrite/denyWrite
 // merge (src/bin/bwrap) — this matches Claude Code's actual settings merge model.
-// verifyClaudeSettingsJson already validated these files' JSON earlier in prepareLaunch,
+// verifyClaudeSettingsOrExit already validated these files' JSON earlier in prepareLaunch,
 // so parse failures here are unexpected; skip the file defensively rather than crash the
 // launcher over it.
 function readSandboxSettingsFiles(): SandboxSettingsFile[] {
-  const paths = [
-    join(homedir(), '.claude', 'settings.json'),
-    join(process.cwd(), '.claude', 'settings.json'),
-    join(process.cwd(), '.claude', 'settings.local.json'),
-  ];
   const files: SandboxSettingsFile[] = [];
-  for (const p of paths) {
+  for (const p of claudeSettingsPaths()) {
     if (!existsSync(p)) continue;
     try {
       files.push(JSON.parse(readFileSync(p, 'utf8')) as SandboxSettingsFile);
@@ -330,8 +304,18 @@ export const claudeCodeAdapter: AgentAdapter = {
   executable: 'claude',
   forwardedArgsTarget: 'claude',
   launchLabel: 'Claude Code',
-  prepareLaunch: (context) => {
-    verifyClaudeSettingsJson();
+  flags: [
+    {
+      name: SKIP_SETTINGS_SCHEMA_FLAG,
+      help: 'Skip validating Claude settings against the schemastore\nschema (JSON syntax is still checked).',
+    },
+  ],
+  prepareLaunch: async (context) => {
+    await verifyClaudeSettingsOrExit(
+      claudeSettingsPaths(),
+      context.args.adapterFlags.has(SKIP_SETTINGS_SCHEMA_FLAG),
+      log,
+    );
     const settings = loadUserSettings(log);
     if (settings.checkRtk) {
       verifyRtkInitialized();
