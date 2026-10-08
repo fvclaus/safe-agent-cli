@@ -14,8 +14,9 @@ export function ensureClaudeSandboxSetting(enabled: boolean, log: (msg: string) 
   if (existsSync(settingsPath)) {
     try {
       settings = JSON.parse(readFileSync(settingsPath, 'utf8')) as Record<string, unknown>;
-    } catch {
-      log(chalk.bold.yellow('WARNING:') + ` Could not parse ${settingsPath} — overwriting.`);
+    } catch (e) {
+      log(chalk.bold.red('ERROR:') + ` Could not parse ${settingsPath}: ${e instanceof Error ? e.message : String(e)}`);
+      process.exit(1);
     }
   }
 

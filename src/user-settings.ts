@@ -8,7 +8,7 @@ import { join } from 'node:path';
 //
 // Parsing is deliberately strict: this tool's founding grievance is Claude Code
 // silently ignoring malformed settings files, so ours hard-fails on bad JSON or
-// wrong types, and warns on unrecognized keys (an opt-in boolean disabled by a
+// wrong types, and on unrecognized keys (an opt-in boolean disabled by a
 // typo would otherwise fail silently — the exact failure mode we exist to stop).
 
 export interface UserSettings {
@@ -30,7 +30,7 @@ export interface UserSettings {
 
 const DEFAULTS: UserSettings = { checkRtk: false };
 
-// Keys tolerated without a warning but carrying no meaning for us.
+// Keys tolerated without an error but carrying no meaning for us.
 const IGNORED_KEYS = new Set(['$schema']);
 
 export function userSettingsPath(
@@ -43,14 +43,11 @@ export function userSettingsPath(
 
 export interface ParsedUserSettings {
   settings: UserSettings;
-  /** Non-fatal issues (e.g. unrecognized keys — possible typos). */
-  warnings: string[];
-  /** Fatal issues (malformed JSON, wrong types). Non-empty ⇒ settings are DEFAULTS. */
+  /** Malformed JSON, wrong types, unrecognized keys. Non-empty ⇒ settings are DEFAULTS. */
   errors: string[];
 }
 
 export function parseUserSettings(content: string): ParsedUserSettings {
-  const warnings: string[] = [];
   const errors: string[] = [];
 
   let raw: unknown;
@@ -58,12 +55,12 @@ export function parseUserSettings(content: string): ParsedUserSettings {
     raw = JSON.parse(content);
   } catch (e) {
     errors.push(`invalid JSON: ${e instanceof Error ? e.message : String(e)}`);
-    return { settings: DEFAULTS, warnings, errors };
+    return { settings: DEFAULTS, errors };
   }
 
   if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) {
     errors.push('must be a JSON object');
-    return { settings: DEFAULTS, warnings, errors };
+    return { settings: DEFAULTS, errors };
   }
 
   const obj = raw as Record<string, unknown>;
@@ -89,21 +86,21 @@ export function parseUserSettings(content: string): ParsedUserSettings {
       }
       settings.sbxSymlinkScanExcludeDirs = value;
     } else if (!IGNORED_KEYS.has(key)) {
-      warnings.push(
+      errors.push(
         'unrecognized key "' + key + '" — check for typos ' +
         '(known keys: checkRtk, claudeFragmentsDir, sbxSymlinkScanExcludeDirs)',
       );
     }
   }
 
-  if (errors.length > 0) return { settings: DEFAULTS, warnings, errors };
-  return { settings, warnings, errors };
+  if (errors.length > 0) return { settings: DEFAULTS, errors };
+  return { settings, errors };
 }
 
 /**
- * Load the user settings file, or defaults when it doesn't exist. Warnings are
- * logged; any error aborts the launch — a broken settings file must never
- * silently degrade into "setting off".
+ * Load the user settings file, or defaults when it doesn't exist. Any error
+ * aborts the launch — a broken settings file must never silently degrade into
+ * "setting off".
  */
 export function loadUserSettings(
   log: (msg: string) => void,
@@ -113,10 +110,7 @@ export function loadUserSettings(
   const path = userSettingsPath(env, home);
   if (!existsSync(path)) return { ...DEFAULTS };
 
-  const { settings, warnings, errors } = parseUserSettings(readFileSync(path, 'utf8'));
-  for (const w of warnings) {
-    log(chalk.bold.yellow('WARNING:') + ` ${path}: ${w}`);
-  }
+  const { settings, errors } = parseUserSettings(readFileSync(path, 'utf8'));
   if (errors.length > 0) {
     for (const e of errors) {
       log(chalk.bold.red('ERROR:') + ` ${path}: ${e}`);

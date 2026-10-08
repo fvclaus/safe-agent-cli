@@ -159,8 +159,9 @@ export async function setupGithubIntegration({
       log(chalk.bold.green('OK:') + ' GITHUB_TOKEN is a fine-grained PAT.');
       if (expiry) log(`  Expires:     ${expiry}`);
     }
-  } catch {
-    log(chalk.bold.yellow('WARNING:') + ' Could not determine GitHub token info.');
+  } catch (e) {
+    log(chalk.bold.red('ERROR:') + ` Could not determine GitHub token info: ${e instanceof Error ? e.message : String(e)}`);
+    process.exit(1);
   }
 
   const ghStateDir = mkdtempSync(join(tmpdir(), 'safe-agent-cli-gh-'));

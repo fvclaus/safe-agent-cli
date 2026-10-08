@@ -24,3 +24,5 @@ settings.local.json
 
 
 CLAUDE.local.md
+# Written by Claude Code into a mod folder when it loads the mod
+src/launch-log-plugin/.claude-plugin/types/

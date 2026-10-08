@@ -23,7 +23,6 @@ describe('parseUserSettings', () => {
     const r = parseUserSettings('{}');
     expect(r.settings).toEqual({ checkRtk: false });
     expect(r.settings.claudeFragmentsDir).toBeUndefined();
-    expect(r.warnings).toEqual([]);
     expect(r.errors).toEqual([]);
   });
 
@@ -51,12 +50,11 @@ describe('parseUserSettings', () => {
     expect(r.errors[0]).toContain('"checkRtk" must be a boolean');
   });
 
-  test('unrecognized key warns (typo protection for opt-in settings)', () => {
+  test('unrecognized key is an error (typo protection for opt-in settings)', () => {
     const r = parseUserSettings('{"checkRTK": true}');
     expect(r.settings.checkRtk).toBe(false);
-    expect(r.warnings).toHaveLength(1);
-    expect(r.warnings[0]).toContain('checkRTK');
-    expect(r.errors).toEqual([]);
+    expect(r.errors).toHaveLength(1);
+    expect(r.errors[0]).toContain('checkRTK');
   });
 
   test('reads claudeFragmentsDir', () => {
@@ -95,7 +93,6 @@ describe('parseUserSettings', () => {
 
   test('$schema is tolerated silently', () => {
     const r = parseUserSettings('{"$schema": "x", "checkRtk": true}');
-    expect(r.warnings).toEqual([]);
     expect(r.errors).toEqual([]);
     expect(r.settings.checkRtk).toBe(true);
   });

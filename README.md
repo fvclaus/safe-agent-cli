@@ -71,6 +71,7 @@ generated file.
 - GCP service-account impersonation and temporary ADC/gcloud config generation
 - `CLAUDE.local.md` generation from a personal fragments library plus built-in fragments (see below)
 - `git-sandboxed`, a `GITHUB_TOKEN`-authenticated git wrapper put on `PATH` inside the sandbox when `--gh` is enabled
+- A launch log shown inside Claude Code's fullscreen renderer, which would otherwise hide everything printed before it starts (see "Launch log" in `CLAUDE.md`)
 - Claude-specific launch behavior through a Claude adapter
 - Best-effort Codex launch behavior through a Codex adapter
 
@@ -80,8 +81,8 @@ safe-agent-cli reads an optional settings file from
 `$XDG_CONFIG_HOME/safe-agent-cli/settings.json` (default:
 `~/.config/safe-agent-cli/settings.json`). Missing file means all defaults.
 
-Parsing is strict: malformed JSON or a wrong type aborts the launch, and
-unrecognized keys print a warning — an opt-in setting disabled by a typo would
+Parsing is strict: malformed JSON, a wrong type or an unrecognized key aborts
+the launch — an opt-in setting disabled by a typo would
 otherwise fail silently, which is the exact failure mode this tool exists to
 prevent.
 
