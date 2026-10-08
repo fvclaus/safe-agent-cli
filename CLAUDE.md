@@ -117,8 +117,16 @@ against the schemastore schema (`https://json.schemastore.org/claude-code-settin
 fetched live on every launch. Strict by default: a syntax error, a schema
 violation, or a failed schema fetch aborts the launch. `--skip-settings-schema`
 skips the schema step entirely (no fetch; syntax still checked) — the way out
-when offline or when schemastore lags behind a new Claude Code setting. There is
-no ignore list. `safe-codex` doesn't read Claude settings and has no such check.
+when offline. There is no ignore list. `safe-codex` doesn't read Claude settings
+and has no such check.
+
+When the schemastore schema lags behind Claude Code's documented settings, the
+fix goes into [src/claude-settings-schema-overlay.ts](src/claude-settings-schema-overlay.ts):
+it replaces the lagging subtree with one written from
+`https://code.claude.com/docs/en/settings-reference.md` before validation. Never
+loosen or skip validation to work around the lag. Its test fails once the
+checked-in schema copy accepts the documented examples unpatched — then drop
+that subtree from the overlay.
 
 Adapter-only boolean switches like this one are declared via `AgentAdapter.flags`
 rather than in the shared launcher's option set.

@@ -1,9 +1,10 @@
 import chalk from 'chalk';
-import { Ajv, type ErrorObject } from 'ajv';
+import { Ajv, type ErrorObject, type ValidateFunction } from 'ajv';
 import ajvFormats from 'ajv-formats';
 import { existsSync, readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
+import { applySchemaOverlay } from './claude-settings-schema-overlay.js';
 
 // Claude Code silently ignores a settings file it can't parse, and silently
 // drops keys or values its schema doesn't accept — so a typo in a sandbox or
@@ -38,6 +39,16 @@ export function claudeSettingsPaths(home = homedir(), project = process.cwd()): 
 export interface ValidateOptions {
   skipSchema: boolean;
   fetchSchema?: SchemaFetcher;
+}
+
+export function compileSettingsValidator(schema: object): ValidateFunction {
+  // strict: false — schemastore schemas use annotation keywords ajv's strict
+  // mode rejects; allErrors so one launch reports every problem at once.
+  const ajv = new Ajv({ strict: false, allErrors: true });
+  // ajv-formats is CommonJS; under NodeNext the default import is the whole
+  // module, whose `default` property is the plugin function.
+  ajvFormats.default(ajv);
+  return ajv.compile(schema);
 }
 
 function formatSchemaError(path: string, e: ErrorObject): string {
@@ -76,13 +87,13 @@ export async function validateClaudeSettingsFiles(paths: string[], options: Vali
     return errors;
   }
 
-  // strict: false — schemastore schemas use annotation keywords ajv's strict
-  // mode rejects; allErrors so one launch reports every problem at once.
-  const ajv = new Ajv({ strict: false, allErrors: true });
-  // ajv-formats is CommonJS; under NodeNext the default import is the whole
-  // module, whose `default` property is the plugin function.
-  ajvFormats.default(ajv);
-  const validate = ajv.compile(schema as object);
+  let validate: ValidateFunction;
+  try {
+    validate = compileSettingsValidator(applySchemaOverlay(schema));
+  } catch (e) {
+    errors.push(`${e instanceof Error ? e.message : String(e)} (pass ${SKIP_SETTINGS_SCHEMA_FLAG} to launch without it)`);
+    return errors;
+  }
   for (const { path, value } of parsed) {
     if (validate(value)) continue;
     for (const e of validate.errors ?? []) errors.push(formatSchemaError(path, e));
