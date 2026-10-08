@@ -69,7 +69,7 @@ describe('resolveSymlinkMountPlan', () => {
         approvalsPath,
         confirm: async () => { confirmCalls++; return true; },
       });
-      expect(plan).toEqual({ bindMountArgs: [], mounted: [], fileCopies: [], declined: [], warnings: [] });
+      expect(plan).toEqual({ bindMountArgs: [], mounted: [], fileCopies: [], declined: [], warnings: [], errors: [] });
       expect(confirmCalls).toBe(0);
     } finally {
       rmSync(root, { recursive: true, force: true });

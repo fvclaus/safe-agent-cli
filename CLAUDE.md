@@ -24,6 +24,10 @@ MUST use **bun** for all package management and script execution. NEVER use npm,
   Shared helper that forces `sandbox.enabled` in the project's (host-side) `.claude/settings.local.json`. Used
   with `true` by the bwrap adapter and `false` by `sbx-claude-code` — see the sbx adapter section below for why
   this is a host-side write, not a write into the sandbox container.
+- [src/launch-log.ts](src/launch-log.ts), [src/launch-log-plugin/](src/launch-log-plugin/)
+  Every pre-launch status line goes through the shared `log`, which still prints to stderr and keeps a copy.
+  The copy is written to a launch-log file that a Claude Code mod shows inside the session — see "Launch log"
+  below. [src/sbx/launch-log.ts](src/sbx/launch-log.ts) installs the mod and the log into an sbx container.
 - [src/adapters/codex.ts](src/adapters/codex.ts)
   Owns Codex-specific launch args and config mapping.
 - [src/commands/claude-code.tsx](src/commands/claude-code.tsx), [src/commands/codex.tsx](src/commands/codex.tsx)
@@ -79,10 +83,15 @@ the design principle above.
 
 Before `build` runs, the project dir is scanned for symlinks whose target
 lives outside it (e.g. `.env` -> a real secrets file under `$HOME`) — sbx only
-mounts the project dir, so such a symlink would otherwise dangle. Only
-absolute-target symlinks are handled (relative ones are only warned about —
-resolution would depend on the sandbox's mount layout matching the host's).
-Each not-yet-approved (sandbox, source, target) triple prompts once;
+mounts the project dir, so such a symlink would otherwise dangle. A relative
+target is first resolved against the directory holding the symlink: one that
+stays inside the project needs nothing, one that leaves it is handled like an
+absolute target. That relies on sbx mounting the project and every extra mount
+at its host path, which holds for directly mounted workspaces but not in
+`--clone` mode (the agent works in a private clone at a path of sbx's
+choosing), where such a link can still dangle — a known limitation, not
+detected, since `--clone` is a switch of the user's generic script. A target
+that does not exist on the host aborts the launch. Each not-yet-approved (sandbox, source, target) triple prompts once;
 approval lives in `~/.config/safe-agent-cli/sbx-symlink-approvals.json` and
 is invalidated if the target changes. `sbx create` only accepts directory
 workspaces, so approved targets are routed by kind: a directory is passed to
@@ -105,6 +114,29 @@ for the bwrap adapter, `false` for `sbx-claude-code`, since Claude Code's own bw
 again inside the already-isolated sbx container is redundant and can conflict. This is a host-side
 file, bind-mounted into the sandbox by the generic script, not a file that needs reconstructing
 inside the container.
+
+## Launch log
+
+Claude Code's fullscreen renderer uses the alternate screen buffer, which hides everything printed before it
+starts. The launcher therefore keeps printing its status lines to stderr as before (a failed launch must stay
+readable in the terminal) and additionally hands them to a Claude Code mod, `src/launch-log-plugin/`:
+
+- Only in fullscreen: in the default renderer the mod does nothing (scrollback already holds the output).
+- Lines are classified by their `OK:` / `WARNING:` / `ERROR:` / `INFO:` / `SKIP:` / `>>` prefix. Output of the
+  generic script and the Ink prompt screens is not part of it.
+- With a warning the pane takes focus and stays until dismissed (Esc); without one it takes no focus and closes
+  after 30 seconds. When the terminal is too narrow for a pane to open on its own, a one-line hint above the
+  prompt stands in.
+- The mod marks the log file `consumed` after showing it, so a log is never shown twice. If the mod cannot run
+  (old Claude Code, untrusted folder, managed settings), nothing extra happens.
+- bwrap: the launcher writes the log into a temp dir and sets `CLAUDE_CODE_PLUGIN_DIRS` and
+  `SAFE_AGENT_CLI_LAUNCH_LOG` in claude's environment. sbx: the plugin is copied into the container's
+  `~/.claude/skills/safe-agent-cli-launch-log/` (loaded automatically) and the log to
+  `~/.claude/safe-agent-cli/launch-log.json`, the mod's fallback when the env var is unset.
+
+Since only warnings are worth interrupting for, anything that should stop a launch is an `ERROR:` that exits.
+`WARNING:` is reserved for what a launch can continue past: a global `~/.claude/CLAUDE.md`, a slow symlink
+scan, and notices that are followed by an interactive prompt anyway.
 
 ## Settings validation
 

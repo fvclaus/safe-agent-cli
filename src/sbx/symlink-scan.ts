@@ -1,5 +1,5 @@
 import { existsSync, readdirSync, readlinkSync } from 'node:fs';
-import { isAbsolute, join, sep } from 'node:path';
+import { dirname, isAbsolute, join, resolve, sep } from 'node:path';
 
 // sbx only mounts the project dir into the sandbox. A symlink inside the
 // project dir whose target lives outside it (e.g. `.env` -> a real secrets
@@ -8,18 +8,20 @@ import { isAbsolute, join, sep } from 'node:path';
 // symlinks so sbx-claude-code can bind-mount their targets in (see
 // symlink-mounts.ts for the approval + mount-arg orchestration).
 //
-// Only ABSOLUTE-target symlinks are handled. A relative symlink's resolution
-// depends on the *sandbox's* directory layout matching the host's closely
-// enough for the relative hops to land in the same place — not guaranteed,
-// and not something safe-agent-cli can verify, so those are only warned
-// about, never auto-mounted.
+// A relative target is resolved against the directory holding the symlink
+// first, then handled like an absolute one. That works because sbx mounts the
+// project (and every extra mount) at its host path, so the relative hops land
+// on the mounted target. In `--clone` mode the agent works in a private clone
+// at a path of sbx's choosing, so such a link can still dangle there — see the
+// sbx adapter section in CLAUDE.md.
 //
 // Cost control: named directories (node_modules, .git, ...) are skipped
 // outright by default (extendable via sbxSymlinkScanExcludeDirs), and if
 // listing + recursing through the rest of one directory's entries takes
 // longer than `warnMs`, the remaining entries in that directory are skipped
 // (once, with a warning) rather than scanning an arbitrarily large subtree
-// unconditionally.
+// unconditionally. A target that does not exist on the host is an error: the
+// project's own symlink is broken, and the sandbox could not fix that.
 
 export const DEFAULT_SYMLINK_SCAN_EXCLUDE_DIRS = ['node_modules', '.git', 'dist', 'build', '.next', 'target', 'vendor'];
 export const DEFAULT_SYMLINK_SCAN_WARN_MS = 300;
@@ -39,30 +41,27 @@ export interface SymlinkMountCandidate {
 export interface SymlinkScanResult {
   candidates: SymlinkMountCandidate[];
   warnings: string[];
+  errors: string[];
 }
 
 type SymlinkClassification =
   | { kind: 'inside-project' }
-  | { kind: 'relative-unsupported' }
   | { kind: 'dangling' }
   | { kind: 'candidate'; target: string };
 
-/** Pure classification, no I/O — testable without touching a real filesystem. */
+/** Pure classification of an absolute target, no I/O — testable without touching a real filesystem. */
 export function classifySymlinkTarget(
-  rawTarget: string,
+  absoluteTarget: string,
   projectRoot: string,
   targetExistsOnHost: boolean,
 ): SymlinkClassification {
-  if (!isAbsolute(rawTarget)) {
-    return { kind: 'relative-unsupported' };
-  }
-  if (rawTarget === projectRoot || rawTarget.startsWith(projectRoot + sep)) {
+  if (absoluteTarget === projectRoot || absoluteTarget.startsWith(projectRoot + sep)) {
     return { kind: 'inside-project' };
   }
   if (!targetExistsOnHost) {
     return { kind: 'dangling' };
   }
-  return { kind: 'candidate', target: rawTarget };
+  return { kind: 'candidate', target: absoluteTarget };
 }
 
 export function scanForExternalSymlinks(
@@ -71,7 +70,7 @@ export function scanForExternalSymlinks(
 ): SymlinkScanResult {
   const excludeDirs = new Set([...DEFAULT_SYMLINK_SCAN_EXCLUDE_DIRS, ...(options.excludeDirs ?? [])]);
   const warnMs = options.warnMs ?? DEFAULT_SYMLINK_SCAN_WARN_MS;
-  const result: SymlinkScanResult = { candidates: [], warnings: [] };
+  const result: SymlinkScanResult = { candidates: [], warnings: [], errors: [] };
 
   function walk(dir: string): void {
     const start = performance.now();
@@ -97,19 +96,13 @@ export function scanForExternalSymlinks(
         } catch {
           continue;
         }
-        const targetExists = isAbsolute(rawTarget) && existsSync(rawTarget);
-        const classification = classifySymlinkTarget(rawTarget, projectRoot, targetExists);
+        const absoluteTarget = isAbsolute(rawTarget) ? rawTarget : resolve(dirname(full), rawTarget);
+        const classification = classifySymlinkTarget(absoluteTarget, projectRoot, existsSync(absoluteTarget));
         switch (classification.kind) {
           case 'inside-project':
             break; // already visible to the sandbox, nothing to do
-          case 'relative-unsupported':
-            result.warnings.push(
-              `${full} -> ${rawTarget}: relative symlink target cannot be reliably bind-mounted into ` +
-              'the sandbox (resolution depends on the sandbox\'s mount layout) — leaving as-is',
-            );
-            break;
           case 'dangling':
-            result.warnings.push(`${full} -> ${rawTarget}: target does not exist on the host — skipping`);
+            result.errors.push(`${full} -> ${rawTarget}: target does not exist on the host`);
             break;
           case 'candidate':
             result.candidates.push({ source: full, target: classification.target });

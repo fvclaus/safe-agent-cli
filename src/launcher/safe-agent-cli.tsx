@@ -5,17 +5,18 @@ import { object } from '@optique/core/constructs';
 import { message } from '@optique/core/message';
 import { run } from '@optique/run';
 import chalk from 'chalk';
-import { rmSync } from 'node:fs';
+import { mkdtempSync, rmSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import type { GcpCliArgs } from '../integrations/gcp.js';
 import { gcpCliOptions, setupGcpIntegration } from '../integrations/gcp.js';
 import type { GithubCliArgs } from '../integrations/github.js';
 import { githubCliOptions, setupGithubIntegration } from '../integrations/github.js';
 import { checkSensitiveEnv } from '../env-check.js';
 import { isGitRepo, missingMandatoryGithub } from '../git-remote.js';
+import { log, writeLaunchLogFile } from '../launch-log.js';
 import { acquireSessionLock, releaseSessionLock } from '../session-lock.js';
-
-const log = (msg: string) => process.stderr.write(msg + '\n');
 
 interface ProjectSelectorProps {
   projects: string[];
@@ -116,6 +117,8 @@ function isSnap(binary: string): boolean {
   return realpath.status === 0 && realpath.stdout.trim() === '/usr/bin/snap';
 }
 
+// A wrong or missing origin/HEAD makes agent-created worktrees branch off the
+// wrong base, silently, so it stops the launch.
 function checkOriginHead(): void {
   if (!isGitRepo()) return;
 
@@ -127,9 +130,7 @@ function checkOriginHead(): void {
   if (lsRemote.status !== 0 || lsRemote.error) {
     const localHead = spawnSync('git', ['symbolic-ref', 'refs/remotes/origin/HEAD'], { encoding: 'utf8' });
     if (localHead.status !== 0) {
-      log(chalk.bold.yellow('WARNING:') + ' origin/HEAD is not set and the remote is unreachable.');
-      log('Worktrees created by agents may use the wrong base branch.');
-      log('Fix with: git remote set-head origin --auto');
+      abortOriginHead('origin/HEAD is not set and the remote is unreachable.');
     }
     return;
   }
@@ -142,18 +143,20 @@ function checkOriginHead(): void {
   const localHead = spawnSync('git', ['symbolic-ref', 'refs/remotes/origin/HEAD'], { encoding: 'utf8' });
 
   if (localHead.status !== 0) {
-    log(chalk.bold.yellow('WARNING:') + ` origin/HEAD is not set. The remote's default branch is "${remoteDefault}".`);
-    log('Worktrees created by agents will use the wrong base branch.');
-    log('Fix with: git remote set-head origin --auto');
-    return;
+    abortOriginHead(`origin/HEAD is not set. The remote's default branch is "${remoteDefault}".`);
   }
 
   const resolvedRef = localHead.stdout.trim();
   if (resolvedRef !== expectedLocalRef) {
-    log(chalk.bold.yellow('WARNING:') + ` origin/HEAD → "${resolvedRef}" but the remote's default branch is "${remoteDefault}".`);
-    log('Worktrees created by agents will use the wrong base branch.');
-    log('Fix with: git remote set-head origin --auto');
+    abortOriginHead(`origin/HEAD → "${resolvedRef}" but the remote's default branch is "${remoteDefault}".`);
   }
+}
+
+function abortOriginHead(problem: string): never {
+  log(chalk.bold.red('ERROR:') + ` ${problem}`);
+  log('Worktrees created by agents would use the wrong base branch.');
+  log('Fix with: git remote set-head origin --auto');
+  process.exit(1);
 }
 
 export function abortIfSnap(binary: string, installHint: string): void {
@@ -185,6 +188,8 @@ export interface SafeAgentLaunchContext {
   gcpConfigDir?: string;
   gcpAdcFile?: string;
   ghStateDir?: string;
+  /** Set when the adapter's `showLaunchLog` is on: the file the launch-log mod reads. */
+  launchLogFile?: string;
 }
 
 /** A boolean switch only one adapter understands, e.g. `--skip-settings-schema`. */
@@ -201,6 +206,8 @@ export interface AgentAdapter {
   forwardedArgsTarget: string;
   launchLabel: string;
   flags?: AdapterFlag[];
+  /** Hand the launcher's status lines to the agent through a launch-log file (see ../launch-log.ts). */
+  showLaunchLog?: boolean;
   prepareLaunch?: (context: SafeAgentLaunchContext) => void | Promise<void>;
   buildLaunchArgs: (context: SafeAgentLaunchContext) => string[];
   buildSpawnEnv?: (context: SafeAgentLaunchContext) => NodeJS.ProcessEnv;
@@ -317,9 +324,10 @@ export async function runSafeAgentCli(adapter: AgentAdapter): Promise<void> {
     ...(github.ghStateDir !== undefined ? { ghStateDir: github.ghStateDir } : {}),
   };
 
+  const launchLogDirs: string[] = [];
   const cleanup = () => {
     releaseSessionLock();
-    for (const dir of [...gcp.cleanupDirs, ...github.cleanupDirs]) {
+    for (const dir of [...gcp.cleanupDirs, ...github.cleanupDirs, ...launchLogDirs]) {
       try { rmSync(dir, { recursive: true, force: true }); } catch { /* ignore */ }
     }
   };
@@ -340,6 +348,13 @@ export async function runSafeAgentCli(adapter: AgentAdapter): Promise<void> {
   await adapter.prepareLaunch?.(context);
 
   log(`Launching ${adapter.launchLabel}…\n`);
+
+  if (adapter.showLaunchLog) {
+    const dir = mkdtempSync(join(tmpdir(), 'safe-agent-cli-launch-log-'));
+    launchLogDirs.push(dir);
+    context.launchLogFile = join(dir, 'launch-log.json');
+    writeLaunchLogFile(context.launchLogFile);
+  }
 
   const launchArgs = adapter.buildLaunchArgs(context);
   const result = spawnSync(adapter.executable, launchArgs, {

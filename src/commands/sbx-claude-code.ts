@@ -4,6 +4,7 @@ import { existsSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { expandHome, generateClaudeLocalMd } from '../claude-fragments.js';
+import { log } from '../launch-log.js';
 import { isGitRepo, missingMandatoryGithub } from '../git-remote.js';
 import { hasRtkHook } from '../rtk.js';
 import { ensureClaudeSandboxSetting } from '../claude-sandbox-setting.js';
@@ -12,16 +13,13 @@ import { ensureDefaultModelEffortLevels } from '../default-model-effort.js';
 import { isGithubConfigured } from '../sbx/github-secret.js';
 import { requireGenericScript, resolveSandboxName, runGenericScript } from '../sbx/generic-script.js';
 import { syncSkillsIntoSandbox } from '../sbx/copy-skills.js';
+import { installLaunchLogIntoSandbox } from '../sbx/launch-log.js';
 import { mergeSettingsSbxIntoSandbox } from '../sbx/merge-settings.js';
 import { loadSettingsSbx } from '../sbx/settings-sbx.js';
 import { copySymlinkFilesIntoSandbox } from '../sbx/symlink-copy.js';
 import { resolveSymlinkMountPlan } from '../sbx/symlink-mounts.js';
 import { loadUserSettings } from '../user-settings.js';
 import { acquireSessionLock, releaseSessionLock } from '../session-lock.js';
-
-const log = (msg: string) => {
-  process.stderr.write(msg + '\n');
-};
 
 interface Args {
   genericScript?: string;
@@ -107,11 +105,7 @@ Reads (required, hard error if missing or malformed):
                                  into the sandbox's in-container
                                  ~/.claude/settings.json, overwriting only
                                  those keys — everything else Claude Code
-                                 itself wrote survives. E.g. add "tui":
-                                 "default" here to keep Claude Code's
-                                 terminal-UI renderer off fullscreen (avoids it
-                                 wiping this script's setup output) across
-                                 every sandbox rebuild.
+                                 itself wrote survives.
 
 Also honors claudeFragmentsDir / checkRtk / sbxSymlinkScanExcludeDirs from
 ~/.config/safe-agent-cli/settings.json, same as safe-claude-code — generates
@@ -129,9 +123,19 @@ once (approval remembered in ~/.config/safe-agent-cli/sbx-symlink-approvals.json
 Directory targets are passed to 'build' as \`--bind-mount <path>\` (your
 claude-generic.sh must support this flag) — live, two-way. File targets are
 copied in via \`sbx cp\` after the sandbox exists — one-way, refreshed every
-launch, listed in CLAUDE.local.md when claudeFragmentsDir is set. Relative
-targets are never auto-mounted (only warned about), since their resolution
-depends on the sandbox's mount layout matching the host's.
+launch, listed in CLAUDE.local.md when claudeFragmentsDir is set. A relative
+target is resolved against the symlink's own folder first: if it stays inside
+the project nothing is needed, otherwise it goes through the same approval as
+an absolute one. A target that does not exist on the host aborts the launch.
+Caveat: with a generic-script mode that works in a private clone of the
+project (e.g. --clone) the sandbox's project path differs from the host's, so
+a relative link pointing outside the project can still dangle there.
+
+Status output: everything printed above also goes into a launch log that a
+mod, copied into the sandbox's ~/.claude/skills, shows inside Claude Code's
+fullscreen renderer (which hides pre-launch output). It stays open until
+dismissed when there is a warning, and closes itself after 30 seconds
+otherwise.
 
 Example:
   sbx-claude-code --generic-script ~/workspace/infrastructure/sbx/claude-generic.sh -- run
@@ -212,6 +216,13 @@ async function main(): Promise<void> {
   for (const warning of symlinkPlan.warnings) {
     log(chalk.bold.yellow('WARNING:') + ` ${warning}`);
   }
+  if (symlinkPlan.errors.length > 0) {
+    for (const error of symlinkPlan.errors) {
+      log(chalk.bold.red('ERROR:') + ` ${error}`);
+    }
+    log('Fix or remove the broken symlink(s) before launching.');
+    process.exit(1);
+  }
   for (const declined of symlinkPlan.declined) {
     log(chalk.bold.yellow('SKIP:') + ` not exposing ${declined.source} -> ${declined.target} (declined)`);
   }
@@ -271,6 +282,7 @@ async function main(): Promise<void> {
   }
 
   log(chalk.bold.cyan('>>') + ` ${genericScript} ${args.launchCommand.join(' ')}`);
+  installLaunchLogIntoSandbox(sandboxName);
   runGenericScript(genericScript, args.launchCommand);
 }
 
