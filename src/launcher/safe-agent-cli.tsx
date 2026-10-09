@@ -169,6 +169,8 @@ export function abortIfSnap(binary: string, installHint: string): void {
 
 interface ParsedArgs extends GithubCliArgs, GcpCliArgs {
   project: string | undefined;
+  /** The adapter's own boolean flags (see AgentAdapter.flags) that were passed. */
+  adapterFlags: ReadonlySet<string>;
   rest: readonly string[];
 }
 
@@ -185,13 +187,21 @@ export interface SafeAgentLaunchContext {
   ghStateDir?: string;
 }
 
+/** A boolean switch only one adapter understands, e.g. `--skip-settings-schema`. */
+export interface AdapterFlag {
+  name: string;
+  /** Lines are separated by '\n' and aligned under the first in --help. */
+  help: string;
+}
+
 export interface AgentAdapter {
   programName: string;
   brief: string;
   executable: string;
   forwardedArgsTarget: string;
   launchLabel: string;
-  prepareLaunch?: (context: SafeAgentLaunchContext) => void;
+  flags?: AdapterFlag[];
+  prepareLaunch?: (context: SafeAgentLaunchContext) => void | Promise<void>;
   buildLaunchArgs: (context: SafeAgentLaunchContext) => string[];
   buildSpawnEnv?: (context: SafeAgentLaunchContext) => NodeJS.ProcessEnv;
 }
@@ -201,13 +211,20 @@ export interface AgentAdapter {
 function printHelpAndExit(adapter: AgentAdapter): never {
   log(adapter.brief);
   log('');
-  log(`Usage: ${adapter.programName} [--gh | --github [PAT_NAME]] [--gcp | --google-cloud] [--project <id>] [--service-account <name>] [-- ...]`);
+  const flags = adapter.flags ?? [];
+  const flagUsage = flags.map(f => ` [${f.name}]`).join('');
+  log(`Usage: ${adapter.programName} [--gh | --github [PAT_NAME]] [--gcp | --google-cloud] [--project <id>] [--service-account <name>]${flagUsage} [-- ...]`);
   log('');
   log('  --gh, --github [PAT_NAME]     Enable GitHub CLI integration (required when the');
   log('                                current directory is a git repository).');
   log('  --gcp, --google-cloud         Enable GCP integration.');
   log('  --project <id>                GCP project id, used with --gcp/--google-cloud.');
   log('  --service-account <name>      GCP service account to impersonate.');
+  for (const f of flags) {
+    const [first, ...more] = f.help.split('\n');
+    log(`  ${f.name.padEnd(30)}${first}`);
+    for (const line of more) log(`${' '.repeat(32)}${line}`);
+  }
   log(`  -- ...                        Everything after '--' is forwarded to ${adapter.forwardedArgsTarget}.`);
   log('                                Unknown switches before \'--\' are an error.');
   process.exit(0);
@@ -231,6 +248,10 @@ export async function runSafeAgentCli(adapter: AgentAdapter): Promise<void> {
   }
 
   abortIfSnap('uv', 'https://docs.astral.sh/uv/getting-started/installation/');
+  // Adapter flags are plain booleans, so they're pulled out before the shared
+  // integration options are parsed; anything left over is still parsed strictly.
+  const adapterFlagNames = new Set((adapter.flags ?? []).map(f => f.name));
+  const adapterFlags = new Set(ownArgv.filter(a => adapterFlagNames.has(a)));
   const parsed = await run(
     object({
       ...gcpCliOptions,
@@ -238,12 +259,12 @@ export async function runSafeAgentCli(adapter: AgentAdapter): Promise<void> {
     }),
     {
       programName: adapter.programName,
-      args: ownArgv,
+      args: ownArgv.filter(a => !adapterFlagNames.has(a)),
       colors: true,
       brief: message`${adapter.brief}`,
     },
   );
-  const args: ParsedArgs = { ...parsed, rest };
+  const args: ParsedArgs = { ...parsed, adapterFlags, rest };
 
   if (missingMandatoryGithub(args.gh !== undefined || args.github !== undefined, isGitRepo())) {
     log(chalk.bold.red('ERROR:') + ' this directory is a git repository; --gh/--github is required.');
@@ -316,7 +337,7 @@ export async function runSafeAgentCli(adapter: AgentAdapter): Promise<void> {
 
   checkOriginHead();
   await checkSensitiveEnv(credentialEnv, log);
-  adapter.prepareLaunch?.(context);
+  await adapter.prepareLaunch?.(context);
 
   log(`Launching ${adapter.launchLabel}…\n`);
 
