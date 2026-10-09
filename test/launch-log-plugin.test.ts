@@ -4,6 +4,7 @@ import {
   buildView,
   consumedText,
   levelStyle,
+  paneHeader,
   paneOpenArgs,
   parseLaunchLog,
   placementFor,
@@ -85,7 +86,7 @@ describe('buildView', () => {
     expect(view.autoCloseMs).toBe(AUTO_CLOSE_MS);
     expect(AUTO_CLOSE_MS).toBe(30_000);
     expect(view.hint).toBe('Launch log: 2 entries');
-    expect(paneOpenArgs(view)).toEqual({ id: 'launch-log', title: 'Launch log' });
+    expect(paneOpenArgs(view)).toEqual({ id: 'launch-log', title: 'Launch log', rows: 3 });
   });
 
   test('with a warning: focus, Esc closes, stays open, warnings first', () => {
@@ -105,6 +106,7 @@ describe('buildView', () => {
       title: 'Launch log',
       focus: true,
       closeOnEscape: true,
+      rows: 5,
     });
   });
 
@@ -115,6 +117,27 @@ describe('buildView', () => {
     ]);
     expect(view.header).toBe('2 warnings — press Esc to dismiss');
     expect(buildView([{ level: 'warning', text: 'a' }]).hint).toBe('Launch log: 1 warning');
+  });
+
+  test('asks for the rows the wrapped log takes inline', () => {
+    // Each line is the 6-cell level prefix plus the text: 6 + 30 = 36 cells,
+    // two rows at 24 body columns (28 terminal columns less the frame's 4).
+    const view = buildView([
+      { level: 'ok', text: 'x'.repeat(30) },
+      { level: 'ok', text: 'short' },
+    ]);
+    expect(paneOpenArgs(view, 28).rows).toBe(1 + 2 + 1);
+  });
+
+  test('the header names the rows a short body cuts off', () => {
+    const view = buildView([
+      { level: 'ok', text: 'a' },
+      { level: 'ok', text: 'b' },
+      { level: 'ok', text: 'c' },
+    ]);
+    expect(paneHeader(view, 80, 4)).toBe(view.header);
+    expect(paneHeader(view, 80, 3)).toBe(`${view.header} — 1 more row below, scroll to see them`);
+    expect(paneHeader(view, 80, 2)).toBe(`${view.header} — 2 more rows below, scroll to see them`);
   });
 
   test('line text is one line per entry', () => {

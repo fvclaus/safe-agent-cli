@@ -164,12 +164,49 @@ export function placementFor(opened) {
   return opened.isPlaced ? 'pane' : 'hint'
 }
 
+// Cells an inline pane's frame takes from the terminal's width.
+const FRAME_COLUMNS = 4
+
+/**
+ * Rows the view takes when its text wraps at `columns`: the header's one,
+ * then each line's wrapped rows. One row per line when the width is unknown.
+ * @param {View} view
+ * @param {number | undefined} columns
+ */
+export function viewRows(view, columns) {
+  const width = columns !== undefined && columns > 0 ? columns : Infinity
+  return view.lines.reduce(
+    (rows, line) => rows + Math.max(1, Math.ceil(line.text.length / width)),
+    1,
+  )
+}
+
+/**
+ * The header as drawn in a body of `bodyRows` × `bodyColumns`: it names the
+ * rows that do not fit, which an unfocused pane gives no other sign of.
+ * @param {View} view
+ * @param {number} bodyColumns
+ * @param {number} bodyRows
+ */
+export function paneHeader(view, bodyColumns, bodyRows) {
+  const hidden = viewRows(view, bodyColumns) - bodyRows
+  if (hidden <= 0) return view.header
+  return `${view.header} — ${hidden} more ${hidden === 1 ? 'row' : 'rows'} below, scroll to see them`
+}
+
 /**
  * How the pane is opened: warnings take the keyboard and close on Escape.
+ * Inline it asks for the rows the whole log takes at `terminalColumns`;
+ * left out, the engine opens it a third of the terminal tall.
  * @param {View} view
+ * @param {number} [terminalColumns]
  */
-export function paneOpenArgs(view) {
+export function paneOpenArgs(view, terminalColumns) {
+  const rows = viewRows(
+    view,
+    terminalColumns === undefined ? undefined : terminalColumns - FRAME_COLUMNS,
+  )
   return view.hasWarnings
-    ? { id: PANE_ID, title: PANE_TITLE, focus: true, closeOnEscape: true }
-    : { id: PANE_ID, title: PANE_TITLE }
+    ? { id: PANE_ID, title: PANE_TITLE, focus: true, closeOnEscape: true, rows }
+    : { id: PANE_ID, title: PANE_TITLE, rows }
 }
