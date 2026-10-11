@@ -171,6 +171,15 @@ and is covered by unit tests.
    machine. The shim strips `--unshare-net` so the sandbox shares your **host
    network namespace** and everything binds on the same `localhost` you use.
 
+   Claude Code's in-sandbox proxy relays listen on fixed ports (`3128`, `1080`),
+   which only works with a private namespace: in the shared one, concurrent
+   sessions fight over those ports and one session's requests reach another
+   session's proxy backend, failing with `407 Proxy Authentication Required`.
+   The shim therefore drops the relays and points every proxy variable
+   (`*_PROXY`, `CLOUDSDK_PROXY_PORT`, `GIT_SSH_COMMAND`, …) straight at the
+   session's own host backend, whose ports Claude Code passes as
+   `CLAUDE_CODE_HOST_HTTP_PROXY_PORT` / `CLAUDE_CODE_HOST_SOCKS_PROXY_PORT`.
+
 2. **Command exit codes are lost under zsh.** Claude Code wraps each command with
    a proxy-cleanup trap, `trap "kill %1 %2 2>/dev/null; exit" EXIT`. Under zsh a
    bare `exit` in a trap returns the status of the trap's last command (the

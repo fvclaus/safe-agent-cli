@@ -2,12 +2,14 @@ import { describe, expect, test } from 'bun:test';
 import {
   appendWritableRebinds,
   discoverProjectRoot,
+  findHostProxyPorts,
   injectWorktreeBinds,
   isWithin,
   NEW_TRAP,
   OLD_TRAP,
   parseGitdir,
   resolveSettingsPath,
+  routeProxyToHostBackend,
   stripDenyWall,
   stripUnshareNetAndFixTrap,
   UPSTREAM_FIXED_TRAP,
@@ -61,6 +63,88 @@ describe('stripUnshareNetAndFixTrap', () => {
 
   test('no-op when the trap is absent', () => {
     expect(stripUnshareNetAndFixTrap(['echo hi'])).toEqual(['echo hi']);
+  });
+});
+
+describe('findHostProxyPorts', () => {
+  test('prefers --setenv values over the inherited env', () => {
+    const args = ['--setenv', 'CLAUDE_CODE_HOST_HTTP_PROXY_PORT', '40491', '--', 'cmd'];
+    expect(findHostProxyPorts(args, { CLAUDE_CODE_HOST_HTTP_PROXY_PORT: '1' })).toEqual({
+      http: '40491',
+      socks: '40491',
+    });
+  });
+
+  test('reads separate http and socks ports from the inherited env', () => {
+    const env = { CLAUDE_CODE_HOST_HTTP_PROXY_PORT: '38193', CLAUDE_CODE_HOST_SOCKS_PROXY_PORT: '39577' };
+    expect(findHostProxyPorts([], env)).toEqual({ http: '38193', socks: '39577' });
+  });
+
+  test('returns null without a numeric http port', () => {
+    expect(findHostProxyPorts([], {})).toBeNull();
+    expect(findHostProxyPorts([], { CLAUDE_CODE_HOST_HTTP_PROXY_PORT: 'x' })).toBeNull();
+  });
+});
+
+describe('routeProxyToHostBackend', () => {
+  const sock = '/tmp/claude-http-b74b3a3072680ab9.sock';
+  const command =
+    `socat TCP-LISTEN:3128,fork,reuseaddr UNIX-CONNECT:${sock} >/dev/null 2>&1 & ` +
+    `socat TCP-LISTEN:1080,fork,reuseaddr UNIX-CONNECT:${sock} >/dev/null 2>&1 & ` +
+    `${UPSTREAM_FIXED_TRAP}\n` +
+    `export GIT_CONFIG_PARAMETERS="'credential.http://localhost:3128.helper='" && eval 'curl localhost:3128'`;
+  const args = [
+    '--setenv', 'CLAUDE_CODE_HOST_HTTP_PROXY_PORT', '40491',
+    '--setenv', 'HTTPS_PROXY', 'http://u:p@localhost:3128',
+    '--setenv', 'ALL_PROXY', 'socks5h://u:p@localhost:1080',
+    '--setenv', 'CLOUDSDK_PROXY_PORT', '3128',
+    '--setenv', 'GIT_SSH_COMMAND', "ssh -o ProxyCommand='socat - PROXY:localhost:%h:%p,proxyport=3128,proxyauth=u:p'",
+    '--', '/usr/bin/zsh', '-c', command,
+  ];
+
+  test('points every --setenv proxy value at the host backend', () => {
+    const out = routeProxyToHostBackend(args, {});
+    expect(out.slice(0, 15)).toEqual([
+      '--setenv', 'CLAUDE_CODE_HOST_HTTP_PROXY_PORT', '40491',
+      '--setenv', 'HTTPS_PROXY', 'http://u:p@localhost:40491',
+      '--setenv', 'ALL_PROXY', 'socks5h://u:p@localhost:40491',
+      '--setenv', 'CLOUDSDK_PROXY_PORT', '40491',
+      '--setenv', 'GIT_SSH_COMMAND', "ssh -o ProxyCommand='socat - PROXY:localhost:%h:%p,proxyport=40491,proxyauth=u:p'",
+    ]);
+  });
+
+  test('drops the relays and repoints the git credential key, but not the user command', () => {
+    const cmd = routeProxyToHostBackend(args, {}).at(-1)!;
+    expect(cmd).not.toContain('socat TCP-LISTEN');
+    expect(cmd).toContain(UPSTREAM_FIXED_TRAP);
+    expect(cmd).toContain("'credential.http://localhost:40491.helper='");
+    expect(cmd).toContain("eval 'curl localhost:3128'");
+  });
+
+  test('re-sets inherited proxy variables before the -- separator', () => {
+    const env = {
+      CLAUDE_CODE_HOST_HTTP_PROXY_PORT: '40491',
+      HTTP_PROXY: 'http://u:p@localhost:3128',
+      RSYNC_PROXY: 'localhost:1080',
+      PATH: '/usr/bin',
+    };
+    expect(routeProxyToHostBackend(['--ro-bind', '/', '/', '--', 'cmd'], env)).toEqual([
+      '--ro-bind', '/', '/',
+      '--setenv', 'HTTP_PROXY', 'http://u:p@localhost:40491',
+      '--setenv', 'RSYNC_PROXY', 'localhost:40491',
+      '--', 'cmd',
+    ]);
+  });
+
+  test('does not re-set an inherited variable that --setenv already overrides', () => {
+    const env = { HTTPS_PROXY: 'http://stale@localhost:3128' };
+    const out = routeProxyToHostBackend(args, env);
+    expect(out.filter((a) => a === 'HTTPS_PROXY')).toHaveLength(1);
+  });
+
+  test('is a no-op without a host port', () => {
+    const noPort = args.slice(3);
+    expect(routeProxyToHostBackend(noPort, {})).toEqual(noPort);
   });
 });
 
