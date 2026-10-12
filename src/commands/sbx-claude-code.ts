@@ -88,12 +88,9 @@ Required:
                              claude-generic.sh this is typically '-- run'.
 
                              Any switches AFTER the command name are also
-                             forwarded to 'build' and 'resolve-name', since a
-                             switch can change which sandbox is meant. Express
-                             mode as a switch, not a separate command:
-                             use '-- run --clone', NOT '-- clone' — a bare
-                             command name does not propagate, so the sandbox
-                             that gets prepared would not be the one launched.
+                             forwarded to 'build' (not to 'resolve-name').
+                             '--clone' is rejected, since it changes the
+                             sandbox name.
 
 Optional:
   --skip-settings-schema    Skip validating the Claude settings files below
@@ -162,16 +159,21 @@ async function main(): Promise<void> {
   await verifyClaudeSettingsOrExit([...claudeSettingsPaths(), settingsSbxPath], args.skipSettingsSchema, log);
 
   // The first token is the launch command's own name — the script's business,
-  // and meaningless to `build` / `resolve-name`. Everything after it may change
-  // WHICH sandbox is meant (e.g. claude-generic.sh's --clone changes the
-  // sandbox name), so it has to reach those two as well or we'd prepare one
-  // sandbox and launch another. See resolveSandboxName's comment.
+  // and meaningless to `build`. Everything after it is forwarded to `build`.
+  // `resolve-name` is called without switches, so a switch that changes the
+  // sandbox name (--clone) would make us prepare one sandbox and launch another.
   const launchSwitches = args.launchCommand.slice(1);
+  if (launchSwitches.includes('--clone')) {
+    throw new Error(
+      '--clone is not supported: resolve-name is called without switches, so the sandbox ' +
+      'that gets prepared would not be the one launched.',
+    );
+  }
 
   // resolve-name doesn't require the sandbox to already be built, so this can
   // run ahead of the build step — needed early so the session lock (acquired
   // next) knows whether GitHub is configured before doing anything else.
-  const sandboxName = resolveSandboxName(genericScript, launchSwitches);
+  const sandboxName = resolveSandboxName(genericScript);
   log(chalk.bold.green('OK:') + ` resolved sandbox name: ${sandboxName}`);
 
   // sbx proxies GitHub credentials into the container itself (see
