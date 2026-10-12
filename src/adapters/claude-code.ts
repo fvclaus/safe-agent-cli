@@ -4,6 +4,7 @@ import { join } from 'node:path';
 import { homedir } from 'node:os';
 import { fileURLToPath } from 'node:url';
 import type { AgentAdapter } from '../launcher/safe-agent-cli.js';
+import { LAUNCH_LOG_ENV, LAUNCH_LOG_PLUGIN_DIR, log } from '../launch-log.js';
 import { ensureClaudeSandboxSetting } from '../claude-sandbox-setting.js';
 import { claudeSettingsPaths, SKIP_SETTINGS_SCHEMA_FLAG, verifyClaudeSettingsOrExit } from '../claude-settings-validation.js';
 import { ensureDefaultModelEffortLevels } from '../default-model-effort.js';
@@ -12,8 +13,6 @@ import { loadUserSettings } from '../user-settings.js';
 import { expandHome, generateClaudeLocalMd, type MatchContext } from '../claude-fragments.js';
 import { isRtkHookInstalled, missingRtkWritePaths, rtkInitializationFailures } from '../rtk.js';
 import { resolveRealBwrap } from '../real-bwrap.js';
-
-const log = (msg: string) => process.stderr.write(msg + '\n');
 
 // Claude Code's sandbox masks these .claude/ subdirectories (they're on its
 // denyWithinAllow list). When a path doesn't exist on disk, bwrap has to
@@ -105,8 +104,9 @@ function ensureProjectSettingsJson(): void {
   if (existsSync(settingsPath)) {
     try {
       settings = JSON.parse(readFileSync(settingsPath, 'utf8')) as Record<string, unknown>;
-    } catch {
-      log(chalk.bold.yellow('WARNING:') + ` Could not parse ${settingsPath} — overwriting.`);
+    } catch (e) {
+      log(chalk.bold.red('ERROR:') + ` Could not parse ${settingsPath}: ${e instanceof Error ? e.message : String(e)}`);
+      process.exit(1);
     }
   }
 
@@ -142,16 +142,16 @@ function ensureUserSafeChainReadAccess(): void {
   const home = homedir();
   const settingsPath = join(home, '.claude', 'settings.json');
   if (!existsSync(settingsPath)) {
-    log(chalk.bold.yellow('WARNING:') + ` ${settingsPath} not found — skipping safe-chain sandbox read-access setup.`);
-    return;
+    log(chalk.bold.red('ERROR:') + ` ${settingsPath} not found — it is needed for the safe-chain sandbox read-access setup.`);
+    process.exit(1);
   }
 
   let settings: Record<string, unknown>;
   try {
     settings = JSON.parse(readFileSync(settingsPath, 'utf8')) as Record<string, unknown>;
-  } catch {
-    log(chalk.bold.yellow('WARNING:') + ` Could not parse ${settingsPath} — skipping safe-chain sandbox read-access setup.`);
-    return;
+  } catch (e) {
+    log(chalk.bold.red('ERROR:') + ` Could not parse ${settingsPath}: ${e instanceof Error ? e.message : String(e)}`);
+    process.exit(1);
   }
 
   const sandbox = (settings['sandbox'] ?? {}) as Record<string, unknown>;
@@ -188,19 +188,17 @@ function verifyRtkInitialized(): void {
   process.exit(1);
 }
 
-// Non-fatal: unlike verifyRtkInitialized, this never blocks the launch, only
-// warns, since rtk still mostly works (compression happens client-side)
-// without its own storage.
-function warnIfRtkWriteAccessMissing(): void {
+function verifyRtkWriteAccess(): void {
   const missing = missingRtkWritePaths();
   if (missing.length === 0) return;
 
   const settingsPath = join(homedir(), '.claude', 'settings.json');
   log(
-    chalk.bold.yellow('WARNING:') +
+    chalk.bold.red('ERROR:') +
       ` checkRtk is enabled but ${settingsPath} is missing sandbox write access for: ${missing.join(', ')}`,
   );
   log(`  Add to sandbox.filesystem.allowWrite: ${JSON.stringify(missing)}`);
+  process.exit(1);
 }
 
 // A global ~/.claude/CLAUDE.md is easy to forget about once you've moved to
@@ -264,14 +262,15 @@ export function missingGitExcludedCommands(files: SandboxSettingsFile[], rtk: bo
 // src/bin/bwrap), independent of claudeFragmentsDir — but its usage
 // instructions only reach the agent via the built-in fragment merged into
 // CLAUDE.local.md, which requires claudeFragmentsDir to be configured at all.
-// Without it the tool is present but undiscoverable, so warn the human.
-function warnIfGithubEnabledWithoutFragments(): void {
+// Without it the tool is present but undiscoverable, so the launch stops.
+function abortGithubEnabledWithoutFragments(): never {
   log(
-    chalk.bold.yellow('WARNING:') +
+    chalk.bold.red('ERROR:') +
       ' --gh is enabled but claudeFragmentsDir is not configured — the agent has no way to learn ' +
       'about git-sandboxed (a git wrapper that authenticates with GITHUB_TOKEN). Configure ' +
       'claudeFragmentsDir in ~/.config/safe-agent-cli/settings.json to surface its usage instructions.',
   );
+  process.exit(1);
 }
 
 // claudeFragmentsDir's mere presence is the on/off switch for generating
@@ -304,6 +303,7 @@ export const claudeCodeAdapter: AgentAdapter = {
   executable: 'claude',
   forwardedArgsTarget: 'claude',
   launchLabel: 'Claude Code',
+  showLaunchLog: true,
   flags: [
     {
       name: SKIP_SETTINGS_SCHEMA_FLAG,
@@ -319,7 +319,7 @@ export const claudeCodeAdapter: AgentAdapter = {
     const settings = loadUserSettings(log);
     if (settings.checkRtk) {
       verifyRtkInitialized();
-      warnIfRtkWriteAccessMissing();
+      verifyRtkWriteAccess();
     }
     warnIfGlobalClaudeMdExists();
     const github = context.githubToken !== undefined;
@@ -341,7 +341,7 @@ export const claudeCodeAdapter: AgentAdapter = {
         process.exit(1);
       }
       if (!settings.claudeFragmentsDir) {
-        warnIfGithubEnabledWithoutFragments();
+        abortGithubEnabledWithoutFragments();
       }
     }
     if (settings.claudeFragmentsDir) {
@@ -376,7 +376,7 @@ export const claudeCodeAdapter: AgentAdapter = {
   // re-sourcing inside each sandboxed command (which clobbers any PATH set
   // via bwrap args, but not this one, since it was already part of the
   // snapshot's own captured PATH).
-  buildSpawnEnv: () => {
+  buildSpawnEnv: (context) => {
     const realBwrap = resolveRealBwrap();
     const srcDir = fileURLToPath(new URL('../', import.meta.url));
     const binDir = join(srcDir, 'bin');
@@ -386,6 +386,12 @@ export const claudeCodeAdapter: AgentAdapter = {
     return {
       PATH: `${binDir}:${process.env['PATH'] ?? ''}`,
       REAL_BWRAP: realBwrap,
+      ...(context.launchLogFile !== undefined && {
+        [LAUNCH_LOG_ENV]: context.launchLogFile,
+        CLAUDE_CODE_PLUGIN_DIRS: [process.env['CLAUDE_CODE_PLUGIN_DIRS'], LAUNCH_LOG_PLUGIN_DIR]
+          .filter((dir): dir is string => Boolean(dir))
+          .join(':'),
+      }),
     };
   },
 };

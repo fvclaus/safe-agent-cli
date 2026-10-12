@@ -71,6 +71,7 @@ generated file.
 - GCP service-account impersonation and temporary ADC/gcloud config generation
 - `CLAUDE.local.md` generation from a personal fragments library plus built-in fragments (see below)
 - `git-sandboxed`, a `GITHUB_TOKEN`-authenticated git wrapper put on `PATH` inside the sandbox when `--gh` is enabled
+- A launch log shown inside Claude Code's fullscreen renderer, which would otherwise hide everything printed before it starts (see "Launch log" in `CLAUDE.md`)
 - Claude-specific launch behavior through a Claude adapter
 - Best-effort Codex launch behavior through a Codex adapter
 
@@ -80,8 +81,8 @@ safe-agent-cli reads an optional settings file from
 `$XDG_CONFIG_HOME/safe-agent-cli/settings.json` (default:
 `~/.config/safe-agent-cli/settings.json`). Missing file means all defaults.
 
-Parsing is strict: malformed JSON or a wrong type aborts the launch, and
-unrecognized keys print a warning — an opt-in setting disabled by a typo would
+Parsing is strict: malformed JSON, a wrong type or an unrecognized key aborts
+the launch — an opt-in setting disabled by a typo would
 otherwise fail silently, which is the exact failure mode this tool exists to
 prevent.
 
@@ -169,6 +170,15 @@ and is covered by unit tests.
    server, database, or preview the agent starts can't be reached from your
    machine. The shim strips `--unshare-net` so the sandbox shares your **host
    network namespace** and everything binds on the same `localhost` you use.
+
+   Claude Code's in-sandbox proxy relays listen on fixed ports (`3128`, `1080`),
+   which only works with a private namespace: in the shared one, concurrent
+   sessions fight over those ports and one session's requests reach another
+   session's proxy backend, failing with `407 Proxy Authentication Required`.
+   The shim therefore drops the relays and points every proxy variable
+   (`*_PROXY`, `CLOUDSDK_PROXY_PORT`, `GIT_SSH_COMMAND`, …) straight at the
+   session's own host backend, whose ports Claude Code passes as
+   `CLAUDE_CODE_HOST_HTTP_PROXY_PORT` / `CLAUDE_CODE_HOST_SOCKS_PROXY_PORT`.
 
 2. **Command exit codes are lost under zsh.** Claude Code wraps each command with
    a proxy-cleanup trap, `trap "kill %1 %2 2>/dev/null; exit" EXIT`. Under zsh a

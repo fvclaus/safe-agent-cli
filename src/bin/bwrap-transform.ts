@@ -44,6 +44,113 @@ export function stripUnshareNetAndFixTrap(argv: readonly string[]): string[] {
   return out;
 }
 
+// Inside the sandbox Claude Code exposes its proxy on fixed ports: each sandboxed
+// command starts `socat TCP-LISTEN:3128` / `TCP-LISTEN:1080` relays to the
+// session's /tmp/claude-http-<hash>.sock, and points every proxy variable at
+// localhost:3128 / localhost:1080. That only works in a private network
+// namespace. With --unshare-net stripped, all sandboxed commands of all sessions
+// share the host namespace: the first relay to bind 3128 wins, the others fail
+// silently, and their requests reach another session's proxy backend, which
+// rejects the credential with 407.
+//
+// The session's backend already listens on the host loopback, and Claude Code
+// passes its ports as CLAUDE_CODE_HOST_HTTP_PROXY_PORT / _SOCKS_PROXY_PORT.
+// Pointing the proxy variables straight at those ports gives every session its
+// own endpoint and makes the relays unnecessary.
+export const SANDBOX_HTTP_PROXY_PORT = '3128';
+export const SANDBOX_SOCKS_PROXY_PORT = '1080';
+export const HOST_HTTP_PROXY_PORT_VAR = 'CLAUDE_CODE_HOST_HTTP_PROXY_PORT';
+export const HOST_SOCKS_PROXY_PORT_VAR = 'CLAUDE_CODE_HOST_SOCKS_PROXY_PORT';
+
+// `socat TCP-LISTEN:3128,fork,reuseaddr UNIX-CONNECT:/tmp/claude-http-<hash>.sock >/dev/null 2>&1 &`
+const SANDBOX_RELAY = /socat TCP-LISTEN:(?:3128|1080),\S* UNIX-CONNECT:\S+ >\/dev\/null 2>&1 &[ \t]*/g;
+// Exported into GIT_CONFIG_PARAMETERS by the command string so git never asks a
+// credential helper for the proxy's own credentials.
+const GIT_PROXY_CREDENTIAL_KEY = 'credential.http://localhost:3128.helper';
+
+interface HostProxyPorts {
+  http: string;
+  socks: string;
+}
+
+/** Read the host backend ports from `--setenv` args first, then the inherited env. */
+export function findHostProxyPorts(
+  args: readonly string[],
+  env: Readonly<Record<string, string | undefined>>,
+): HostProxyPorts | null {
+  const lookup = (name: string): string | undefined => {
+    for (let i = 0; i + 2 < args.length; i++) {
+      if (args[i] === '--setenv' && args[i + 1] === name) return args[i + 2];
+    }
+    return env[name];
+  };
+  const isPort = (p: string | undefined): p is string => p !== undefined && /^\d+$/.test(p);
+  const http = lookup(HOST_HTTP_PROXY_PORT_VAR);
+  if (!isPort(http)) return null;
+  const socks = lookup(HOST_SOCKS_PROXY_PORT_VAR);
+  return { http, socks: isPort(socks) ? socks : http };
+}
+
+function repointProxyValue(value: string, ports: HostProxyPorts): string {
+  return value
+    .replace(/localhost:3128\b/g, `localhost:${ports.http}`)
+    .replace(/localhost:1080\b/g, `localhost:${ports.socks}`)
+    .replace(/proxyport=3128\b/g, `proxyport=${ports.http}`);
+}
+
+function repointEnvValue(name: string, value: string, ports: HostProxyPorts): string {
+  if (name === 'CLOUDSDK_PROXY_PORT' && value === SANDBOX_HTTP_PROXY_PORT) return ports.http;
+  return repointProxyValue(value, ports);
+}
+
+/**
+ * Step 2b: point the sandbox's proxy configuration at the session's own host
+ * backend instead of the shared fixed ports, and drop the now-unused relays.
+ * Rewrites `--setenv` values, proxy variables the sandbox inherits from `env`
+ * (re-set via `--setenv` before the `--` separator), and the wrapped command
+ * string. Without a host port to route to, the args are returned unchanged.
+ */
+export function routeProxyToHostBackend(
+  args: readonly string[],
+  env: Readonly<Record<string, string | undefined>>,
+): string[] {
+  const ports = findHostProxyPorts(args, env);
+  if (!ports) return [...args];
+
+  const out: string[] = [];
+  const setByArgs = new Set<string>();
+  for (let i = 0; i < args.length; i++) {
+    const a = args[i]!;
+    if (a === '--setenv' && i + 2 < args.length) {
+      const name = args[i + 1]!;
+      setByArgs.add(name);
+      out.push(a, name, repointEnvValue(name, args[i + 2]!, ports));
+      i += 2;
+      continue;
+    }
+    // The command string also embeds the user's command, so only the harness's own
+    // proxy references are rewritten — never a bare localhost:3128 the user typed.
+    out.push(
+      a
+        .replace(SANDBOX_RELAY, '')
+        .split(GIT_PROXY_CREDENTIAL_KEY)
+        .join(`credential.http://localhost:${ports.http}.helper`),
+    );
+  }
+
+  const inherited: string[] = [];
+  for (const [name, value] of Object.entries(env)) {
+    if (value === undefined || setByArgs.has(name)) continue;
+    const repointed = repointEnvValue(name, value, ports);
+    if (repointed !== value) inherited.push('--setenv', name, repointed);
+  }
+  if (inherited.length === 0) return out;
+
+  const sep = out.indexOf('--');
+  if (sep === -1) return out;
+  return [...out.slice(0, sep), ...inherited, ...out.slice(sep)];
+}
+
 /** Extract the target path from a git worktree `.git` pointer file's contents. */
 export function parseGitdir(pointerContents: string): string | null {
   const line = pointerContents.split('\n').find((l) => l.startsWith('gitdir:'));

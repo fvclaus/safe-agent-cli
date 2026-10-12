@@ -44,8 +44,10 @@ export interface SymlinkMountPlan {
   /** File-target candidates, approved but not yet pushed — push after `build` via symlink-copy.ts. */
   fileCopies: SymlinkMountCandidate[];
   declined: SymlinkMountCandidate[];
-  /** From the scan: relative-target, dangling, or slow-subfolder notices. */
+  /** From the scan: slow-subfolder notices. */
   warnings: string[];
+  /** From the scan: symlinks whose target does not exist on the host. Non-empty ⇒ the launch must stop. */
+  errors: string[];
 }
 
 async function promptSymlinkApproval(candidate: SymlinkMountCandidate, sandboxName: string): Promise<boolean> {
@@ -95,6 +97,7 @@ export async function resolveSymlinkMountPlan(
     fileCopies: [],
     declined: [],
     warnings: scan.warnings,
+    errors: scan.errors,
   };
   if (scan.candidates.length === 0) return result;
 

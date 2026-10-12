@@ -1,8 +1,10 @@
-import { existsSync, mkdtempSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { copyStagedClaudeTreeIntoHome } from './copy-into-home.js';
 import { resolveSandboxHome } from './home.js';
+import { runSbx } from './run-sbx.js';
 
 // Mirrors the host's ~/.claude/skills into the sandbox's in-container
 // ~/.claude/skills, following the same "host is authoritative only for what it
@@ -23,18 +25,8 @@ import { resolveSandboxHome } from './home.js';
 //
 // Batching: every skill to remove or replace is deleted in ONE `sbx exec rm
 // -rf` call, and every upserted skill is staged locally then pushed in ONE
-// `sbx cp <tmpDir>/. sandbox:<skillsDir>` (docker-cp's "copy directory
-// CONTENTS into an existing destination" form) — 2 round-trips total instead
-// of one rm+cp pair per skill. That contents-only form was verified against a
-// real sandbox (probe-sbx-batch-cp-v2.sh): it merges flatly with no nesting
-// and leaves unrelated siblings alone, but it also carries the LOCAL staging
-// dir's own owner/mode onto the destination directory on extraction. Node's
-// `mkdtempSync` defaults to 0700, which would lock the sandbox user out of
-// paths it just created (confirmed — first probe run needed `sudo chown` to
-// recover). `chmod -R 0777` on the staging dir before the cp neutralizes
-// that: whatever owner UID lands on the container side, the mode bits alone
-// guarantee the sandbox user can still read AND rm -rf these paths, this run
-// and on the next one.
+// `sbx cp` (see copy-into-home.ts for how the copy merges, why ownership is
+// fixed afterwards, and the location check that follows it).
 
 const MARKER = '.sbx-host-synced';
 const MARKER_BODY =
@@ -87,14 +79,6 @@ function listHostSkills(hostSkillsDir: string): string[] {
   return skills;
 }
 
-export function runSbx(args: string[], what: string): void {
-  const result = spawnSync('sbx', args, { encoding: 'utf8' });
-  if (result.error) throw result.error;
-  if ((result.status ?? 1) !== 0) {
-    throw new Error(`${what} failed: ${result.stderr || `exit code ${result.status}`}`);
-  }
-}
-
 /** Basenames of skills in the sandbox that carry our provenance marker. */
 function listMarkedSandboxSkills(sandboxName: string, skillsDir: string): string[] {
   // No `set -e`: the `[ -e ] && basename` idiom returns nonzero for every skill
@@ -114,8 +98,8 @@ function listMarkedSandboxSkills(sandboxName: string, skillsDir: string): string
 }
 
 /** Stage a dereferenced copy of one host skill (real files, not symlinks) plus its provenance marker. */
-function stageSkill(hostSkillsDir: string, skill: string, tmpDir: string): void {
-  const staged = join(tmpDir, skill);
+function stageSkill(hostSkillsDir: string, skill: string, stagedSkillsDir: string): void {
+  const staged = join(stagedSkillsDir, skill);
   const cp = spawnSync('cp', ['-rL', join(hostSkillsDir, skill), staged], { encoding: 'utf8' });
   if (cp.error) throw cp.error;
   if ((cp.status ?? 1) !== 0) {
@@ -144,8 +128,7 @@ export function syncSkillsIntoSandbox(sandboxName: string, hostSkillsDir: string
 
   // Every path that needs to disappear before the batched copy: pruned
   // skills (host no longer has them) plus every upserted skill (so the
-  // merge-copy below creates each one fresh rather than nesting under
-  // docker-cp's "copy into an existing path" rule). One rm -rf call covers
+  // merge-copy below creates each one fresh). One rm -rf call covers
   // all of them — bare argv, no shell, multiple paths in a single invocation.
   const removeTargets = [...plan.prune, ...plan.upsert].map((s) => `${skillsDir}/${s}`);
   if (removeTargets.length > 0) {
@@ -153,24 +136,19 @@ export function syncSkillsIntoSandbox(sandboxName: string, hostSkillsDir: string
   }
 
   if (plan.upsert.length > 0) {
-    runSbx(['exec', sandboxName, 'mkdir', '-p', skillsDir], `creating ${skillsDir}`);
     const tmpDir = mkdtempSync(join(tmpdir(), 'sbx-claude-code-skills-'));
     try {
-      for (const skill of plan.upsert) stageSkill(hostSkillsDir, skill, tmpDir);
+      const stagedSkillsDir = join(tmpDir, '.claude', 'skills');
+      mkdirSync(stagedSkillsDir, { recursive: true });
+      for (const skill of plan.upsert) stageSkill(hostSkillsDir, skill, stagedSkillsDir);
 
-      // chmod 0777 before handing the tree to `sbx cp`: the contents-only
-      // merge-copy ('<tmpDir>/.') carries this directory's own owner/mode
-      // onto the EXISTING destination on extraction (verified against a real
-      // sandbox — see probe-sbx-batch-cp-v2.sh). mkdtempSync defaults to
-      // 0700, which would otherwise lock the sandbox user out of paths we
-      // just created — both this run and on the rm -rf above on the next one.
-      const chmodRes = spawnSync('chmod', ['-R', '0777', tmpDir], { encoding: 'utf8' });
-      if (chmodRes.error) throw chmodRes.error;
-      if ((chmodRes.status ?? 1) !== 0) {
-        throw new Error(`chmod of staging dir failed: ${chmodRes.stderr}`);
-      }
-
-      runSbx(['cp', `${tmpDir}/.`, `${sandboxName}:${skillsDir}`], 'copying staged skills into sandbox');
+      copyStagedClaudeTreeIntoHome({
+        sandboxName,
+        home,
+        stagedRoot: tmpDir,
+        ownedTrees: plan.upsert.map((s) => `.claude/skills/${s}`),
+        expectedFiles: plan.upsert.map((s) => `.claude/skills/${s}/${MARKER}`),
+      });
     } finally {
       rmSync(tmpDir, { recursive: true, force: true });
     }

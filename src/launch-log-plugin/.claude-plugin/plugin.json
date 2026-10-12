@@ -1,0 +1,7 @@
+{
+  "name": "safe-agent-cli-launch-log",
+  "version": "0.1.0",
+  "description": "Shows the safe-agent-cli launch log once, in a pane or above the prompt",
+  "defaultEnabled": true,
+  "types": "./types/index.d.ts"
+}

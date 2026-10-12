@@ -9,7 +9,9 @@
  * unit-tested through) ./bwrap-transform.ts:
  *
  *   1. Strip `--unshare-net` so the sandbox shares the host network namespace,
- *      making processes the agent starts (e.g. a dev server) reachable.
+ *      making processes the agent starts (e.g. a dev server) reachable. Point the
+ *      proxy variables at the session's own host proxy backend, since the fixed
+ *      in-sandbox proxy ports would otherwise be shared by every session.
  *   2. Fix older Claude Code versions' proxy-cleanup trap so it preserves the
  *      real exit code (current versions ship the fix; theirs is left alone).
  *   3. Inject the missing gitdir binds when the project is a git worktree.
@@ -36,6 +38,7 @@ import {
   injectWorktreeBinds,
   isWithin,
   resolveSettingsPath,
+  routeProxyToHostBackend,
   stripDenyWall,
   stripUnshareNetAndFixTrap,
   type WorktreeProbe,
@@ -77,6 +80,9 @@ function debugLog(line: string): void {
 
 // ── 1 & 2. Strip --unshare-net and fix the exit-code-eating trap ────────────────
 let args = stripUnshareNetAndFixTrap(process.argv.slice(2));
+
+// ── 2b. Route the proxy to this session's own host backend ──────────────────────
+args = routeProxyToHostBackend(args, process.env);
 
 // ── 3. Inject worktree gitdir binds ─────────────────────────────────────────────
 const worktreeProbe: WorktreeProbe = {
