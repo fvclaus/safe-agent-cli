@@ -199,6 +199,13 @@ export interface AdapterFlag {
   help: string;
 }
 
+/** A boolean switch only one adapter understands, e.g. `--skip-settings-schema`. */
+export interface AdapterFlag {
+  name: string;
+  /** Lines are separated by '\n' and aligned under the first in --help. */
+  help: string;
+}
+
 export interface AgentAdapter {
   programName: string;
   brief: string;
