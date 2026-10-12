@@ -143,6 +143,13 @@ Since only warnings are worth interrupting for, anything that should stop a laun
 `WARNING:` is reserved for what a launch can continue past: a global `~/.claude/CLAUDE.md`, a slow symlink
 scan, and notices that are followed by an interactive prompt anyway.
 
+## Claude update
+
+`safe-claude-code` runs `claude update` first in `prepareLaunch`
+([src/claude-update.ts](src/claude-update.ts)) and puts its output in the launch log. A failing or
+unspawnable update is a `WARNING:`, not a stop. `sbx-claude-code` does not run it: Claude runs inside
+the container, where the host's `claude` is not the one being launched.
+
 ## Settings validation
 
 Every Claude launch path (bwrap and sbx) runs `verifyClaudeSettingsOrExit`
