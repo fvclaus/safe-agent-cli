@@ -70,12 +70,10 @@ the caller passes after `--` (e.g. `-- run`), passed through verbatim, so no
 command name is assumed to exist on the script. It's required: there is no
 default launch command.
 
-Switches after the launch command name are forwarded to `build` and
-`resolve-name` too, because a switch can change *which* sandbox is meant — e.g.
-`claude-generic.sh`'s `--clone` changes the sandbox name, so without forwarding
-we'd build and inject hooks into one sandbox and launch another, silently. This
-means mode must be expressed as a switch: `-- run --clone`, not `-- clone`
-(a bare command name doesn't propagate).
+Switches after the launch command name are forwarded to `build` only;
+`resolve-name` is called without switches. A switch that changes *which* sandbox
+is meant — `claude-generic.sh`'s `--clone` — would make us build and inject hooks
+into one sandbox and launch another, so `--clone` is rejected with an error.
 
 `~/.claude/settings-sbx.json` is user-authored and required (hard error if
 missing/malformed) — safe-agent-cli never ships or assumes its content, per

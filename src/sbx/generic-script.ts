@@ -15,10 +15,10 @@ import { spawnSync } from 'node:child_process';
 // assumed to exist.
 //
 // Any switches the caller puts after the launch command name are forwarded to
-// `build` and `resolve-name` as well, because a switch can change WHICH sandbox
-// is meant — e.g. claude-generic.sh's `--clone` changes the sandbox name. If
-// they weren't forwarded, we'd build and inject hooks into one sandbox and then
-// launch a different one, with nothing to signal the mismatch.
+// `build`, but not to `resolve-name`, which is called without switches. A switch
+// that changes WHICH sandbox is meant (claude-generic.sh's `--clone`) is
+// therefore rejected by the caller: we'd build and inject hooks into one sandbox
+// and then launch a different one.
 //
 // The script is executed directly (not via `bash <script>`), so its own
 // shebang decides the interpreter — a bash wrapper and a bun/TS script (e.g.
@@ -97,8 +97,8 @@ export function runGenericScriptCaptured(scriptPath: string, args: string[]): st
  * is the pluggable script's business, and `workspaces` is a list anyway once a
  * script mounts extra read-only paths.
  */
-export function resolveSandboxName(scriptPath: string, switches: string[] = []): string {
-  const result = spawnSync(scriptPath, ['resolve-name', ...switches], { encoding: 'utf8' });
+export function resolveSandboxName(scriptPath: string): string {
+  const result = spawnSync(scriptPath, ['resolve-name'], { encoding: 'utf8' });
   if (result.error) throw result.error;
   const status = result.status ?? 1;
   if (status !== 0) {
