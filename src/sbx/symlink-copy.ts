@@ -2,7 +2,7 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import { basename, dirname, join } from 'node:path';
-import { runSbx } from './copy-skills.js';
+import { runSbx } from './run-sbx.js';
 import type { SymlinkMountCandidate } from './symlink-scan.js';
 
 // A symlink target that's a FILE can't be bind-mounted directly — `sbx create`

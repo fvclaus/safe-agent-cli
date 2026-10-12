@@ -1,15 +1,15 @@
-import { spawnSync } from 'node:child_process';
 import { cpSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { basename, dirname, join } from 'node:path';
+import { dirname, join } from 'node:path';
 import {
   LAUNCH_LOG_HOME_RELATIVE_PATH,
   LAUNCH_LOG_PLUGIN_DIR,
   LAUNCH_LOG_PLUGIN_NAME,
   serializeLaunchLog,
 } from '../launch-log.js';
-import { runSbx } from './copy-skills.js';
+import { copyStagedClaudeTreeIntoHome } from './copy-into-home.js';
 import { resolveSandboxHome } from './home.js';
+import { runSbx } from './run-sbx.js';
 
 // Installs the launch-log mod (../launch-log-plugin) into the sandbox and
 // hands it the log collected so far. Claude Code loads any folder under the
@@ -19,35 +19,43 @@ import { resolveSandboxHome } from './home.js';
 // $HOME. Unlike the skills sync, the plugin carries no provenance marker, so a
 // later sync never prunes it; it is replaced wholesale on every launch.
 //
-// Same `sbx cp` contents-form and 0777 staging as copy-skills.ts, for the same
-// reasons: the copy carries the staging dir's own owner/mode onto the existing
-// destination, and the sandbox user must stay able to read, rewrite (the mod
-// marks the log consumed) and `rm -rf` these paths.
+// Must run after the last `log` call of the launch: whatever is logged later
+// is not in the file the mod reads.
+
+/** The mod's files, relative to its folder. Only these reach the sandbox; the folder also holds files Claude Code generates (tsconfig.json, types/, .claude/). */
+export const LAUNCH_LOG_PLUGIN_FILES = [
+  '.claude-plugin/plugin.json',
+  'hooks/hooks.json',
+  'hooks/register.js',
+  'hooks/launch-log.js',
+] as const;
+
+const SKILLS_RELATIVE_DIR = '.claude/skills';
 
 export function installLaunchLogIntoSandbox(sandboxName: string): void {
   const home = resolveSandboxHome(sandboxName);
-  const pluginDest = `${home}/.claude/skills/${LAUNCH_LOG_PLUGIN_NAME}`;
-  const logDest = `${home}/${LAUNCH_LOG_HOME_RELATIVE_PATH}`;
-  const logDir = dirname(logDest);
+  const pluginRelative = `${SKILLS_RELATIVE_DIR}/${LAUNCH_LOG_PLUGIN_NAME}`;
 
-  runSbx(['exec', sandboxName, 'rm', '-rf', pluginDest], 'removing the previous launch-log mod');
-  runSbx(['exec', sandboxName, 'mkdir', '-p', pluginDest, logDir], 'creating the launch-log mod directories');
+  runSbx(['exec', sandboxName, 'rm', '-rf', `${home}/${pluginRelative}`], 'removing the previous launch-log mod');
 
   const tmpDir = mkdtempSync(join(tmpdir(), 'sbx-claude-code-launch-log-'));
   try {
-    const stagedPlugin = join(tmpDir, 'plugin');
-    const stagedLog = join(tmpDir, 'log');
-    cpSync(LAUNCH_LOG_PLUGIN_DIR, stagedPlugin, { recursive: true, dereference: true });
-    mkdirSync(stagedLog);
-    writeFileSync(join(stagedLog, basename(logDest)), serializeLaunchLog(), 'utf8');
-    const chmodRes = spawnSync('chmod', ['-R', '0777', tmpDir], { encoding: 'utf8' });
-    if (chmodRes.error) throw chmodRes.error;
-    if ((chmodRes.status ?? 1) !== 0) {
-      throw new Error(`chmod of staging dir failed: ${chmodRes.stderr}`);
+    for (const file of LAUNCH_LOG_PLUGIN_FILES) {
+      const target = join(tmpDir, pluginRelative, file);
+      mkdirSync(dirname(target), { recursive: true });
+      cpSync(join(LAUNCH_LOG_PLUGIN_DIR, file), target, { dereference: true });
     }
+    const stagedLog = join(tmpDir, LAUNCH_LOG_HOME_RELATIVE_PATH);
+    mkdirSync(dirname(stagedLog), { recursive: true });
+    writeFileSync(stagedLog, serializeLaunchLog(), 'utf8');
 
-    runSbx(['cp', `${stagedPlugin}/.`, `${sandboxName}:${pluginDest}`], 'copying the launch-log mod into sandbox');
-    runSbx(['cp', `${stagedLog}/.`, `${sandboxName}:${logDir}`], 'copying the launch log into sandbox');
+    copyStagedClaudeTreeIntoHome({
+      sandboxName,
+      home,
+      stagedRoot: tmpDir,
+      ownedTrees: [pluginRelative, dirname(LAUNCH_LOG_HOME_RELATIVE_PATH)],
+      expectedFiles: [...LAUNCH_LOG_PLUGIN_FILES.map((f) => `${pluginRelative}/${f}`), LAUNCH_LOG_HOME_RELATIVE_PATH],
+    });
   } finally {
     rmSync(tmpDir, { recursive: true, force: true });
   }

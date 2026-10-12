@@ -132,7 +132,11 @@ readable in the terminal) and additionally hands them to a Claude Code mod, `src
 - bwrap: the launcher writes the log into a temp dir and sets `CLAUDE_CODE_PLUGIN_DIRS` and
   `SAFE_AGENT_CLI_LAUNCH_LOG` in claude's environment. sbx: the plugin is copied into the container's
   `~/.claude/skills/safe-agent-cli-launch-log/` (loaded automatically) and the log to
-  `~/.claude/safe-agent-cli/launch-log.json`, the mod's fallback when the env var is unset.
+  `~/.claude/safe-agent-cli/launch-log.json`, the mod's fallback when the env var is unset. Only the files in
+  `LAUNCH_LOG_PLUGIN_FILES` are copied, and the install is the last step before the launch command: nothing may
+  `log` after it. Copies into the sandbox go through [src/sbx/copy-into-home.ts](src/sbx/copy-into-home.ts), which
+  copies a named staged directory (never the `<dir>/.` form, which `sbx cp` nests one level deeper), hands
+  ownership back to the sandbox user with `sudo chown`, and fails the launch if an expected file is missing.
 
 Since only warnings are worth interrupting for, anything that should stop a launch is an `ERROR:` that exits.
 `WARNING:` is reserved for what a launch can continue past: a global `~/.claude/CLAUDE.md`, a slow symlink
