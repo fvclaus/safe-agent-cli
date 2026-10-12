@@ -8,6 +8,7 @@ import {
   launchLogEntries,
   levelOfLine,
   log,
+  recordCapturedOutput,
   resetLaunchLog,
   serializeLaunchLog,
   writeLaunchLogFile,
@@ -88,5 +89,23 @@ describe('log', () => {
       write.mockRestore();
       rmSync(dir, { recursive: true, force: true });
     }
+  });
+});
+
+describe('recordCapturedOutput', () => {
+  afterEach(() => resetLaunchLog());
+
+  test('records classified lines without printing them', () => {
+    const write = spyOn(process.stderr, 'write').mockImplementation(() => true);
+    try {
+      recordCapturedOutput('building\n\u001b[33mWARNING:\u001b[0m template drift\n\n');
+      expect(write).not.toHaveBeenCalled();
+    } finally {
+      write.mockRestore();
+    }
+    expect(launchLogEntries()).toEqual([
+      { level: 'info', text: 'building' },
+      { level: 'warning', text: 'WARNING: template drift' },
+    ]);
   });
 });

@@ -5,13 +5,14 @@ import {
   PANE_ID,
   buildView,
   consumedText,
-  levelStyle,
+  labelStyle,
   paneHeader,
   paneOpenArgs,
   parseLaunchLog,
   placementFor,
   resolveLogPath,
   shouldAct,
+  splitLabel,
 } from './launch-log.js'
 
 const view = atom({ plugin: 'safe-agent-cli-launch-log', key: 'view' }, null)
@@ -143,9 +144,15 @@ export const register = on => {
       Box,
       { flexDirection: 'column' },
       h(Text, { ...headerStyle, wrap: 'wrap' }, paneHeader(current, e.props.bodyColumns, e.props.scroll.bodyRows)),
-      ...current.lines.map(line =>
-        h(Text, { ...levelStyle(line.level), wrap: 'wrap' }, line.text),
-      ),
+      ...current.lines.map(line => {
+        const { label, rest } = splitLabel(line.text)
+        return h(
+          Text,
+          { wrap: 'wrap' },
+          label === '' ? null : h(Text, labelStyle(line.level), label),
+          rest,
+        )
+      }),
     )
   })
 }

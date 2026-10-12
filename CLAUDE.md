@@ -122,8 +122,9 @@ starts. The launcher therefore keeps printing its status lines to stderr as befo
 readable in the terminal) and additionally hands them to a Claude Code mod, `src/launch-log-plugin/`:
 
 - Only in fullscreen: in the default renderer the mod does nothing (scrollback already holds the output).
-- Lines are classified by their `OK:` / `WARNING:` / `ERROR:` / `INFO:` / `SKIP:` / `>>` prefix. Output of the
-  generic script and the Ink prompt screens is not part of it.
+- Lines are classified by their `OK:` / `WARNING:` / `ERROR:` / `INFO:` / `SKIP:` / `>>` prefix. The generic
+  script's `build` output is captured instead of printed and goes into the log after its `>>` line
+  (classified the same way); the launch command's output and the Ink prompt screens are not part of it.
 - With a warning the pane takes focus and stays until dismissed (Esc); without one it takes no focus and closes
   after 30 seconds. When the terminal is too narrow for a pane to open on its own, a one-line hint above the
   prompt stands in.

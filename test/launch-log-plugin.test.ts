@@ -2,8 +2,9 @@ import { describe, expect, test } from 'bun:test';
 import {
   AUTO_CLOSE_MS,
   buildView,
+  splitLabel,
   consumedText,
-  levelStyle,
+  labelStyle,
   paneHeader,
   paneOpenArgs,
   parseLaunchLog,
@@ -147,14 +148,13 @@ describe('buildView', () => {
   });
 });
 
-describe('levelStyle', () => {
-  test('colors ok, warning and error; dims the rest', () => {
-    expect(levelStyle('ok')).toEqual({ color: 'success' });
-    expect(levelStyle('warning')).toEqual({ color: 'warning' });
-    expect(levelStyle('error')).toEqual({ color: 'error' });
-    for (const level of ['info', 'skip', 'progress'] as const) {
-      expect(levelStyle(level)).toEqual({ dimColor: true });
-    }
+describe('labelStyle', () => {
+  test('colors labels like the terminal output', () => {
+    expect(labelStyle('ok')).toEqual({ bold: true, color: 'success' });
+    expect(labelStyle('warning')).toEqual({ bold: true, color: 'warning' });
+    expect(labelStyle('error')).toEqual({ bold: true, color: 'error' });
+    expect(labelStyle('progress')).toEqual({ bold: true, color: 'cyan' });
+    expect(labelStyle('info')).toEqual({ dimColor: true });
   });
 });
 
@@ -174,5 +174,21 @@ describe('placementFor', () => {
 
   test('narrow terminal: the pane waits, so the hint shows', () => {
     expect(placementFor({ isPlaced: false })).toBe('hint');
+  });
+});
+
+describe('splitLabel', () => {
+  test('splits the leading label from the plain rest', () => {
+    expect(splitLabel('OK: settings valid')).toEqual({ label: 'OK:', rest: ' settings valid' });
+    expect(splitLabel('>> sbx build')).toEqual({ label: '>>', rest: ' sbx build' });
+  });
+
+  test('leaves unlabeled text whole', () => {
+    expect(splitLabel('plain')).toEqual({ label: '', rest: 'plain' });
+    expect(splitLabel('  >> indented')).toEqual({ label: '', rest: '  >> indented' });
+  });
+
+  test('buildView keeps the full text', () => {
+    expect(buildView([{ level: 'ok', text: 'OK: done' }]).lines[0]?.text).toBe('OK: done');
   });
 });

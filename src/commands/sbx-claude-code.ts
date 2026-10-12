@@ -4,14 +4,19 @@ import { existsSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { expandHome, generateClaudeLocalMd } from '../claude-fragments.js';
-import { log } from '../launch-log.js';
+import { log, recordCapturedOutput } from '../launch-log.js';
 import { isGitRepo, missingMandatoryGithub } from '../git-remote.js';
 import { hasRtkHook } from '../rtk.js';
 import { ensureClaudeSandboxSetting } from '../claude-sandbox-setting.js';
 import { claudeSettingsPaths, SKIP_SETTINGS_SCHEMA_FLAG, verifyClaudeSettingsOrExit } from '../claude-settings-validation.js';
 import { ensureDefaultModelEffortLevels } from '../default-model-effort.js';
 import { isGithubConfigured } from '../sbx/github-secret.js';
-import { requireGenericScript, resolveSandboxName, runGenericScript } from '../sbx/generic-script.js';
+import {
+  requireGenericScript,
+  resolveSandboxName,
+  runGenericScript,
+  runGenericScriptCaptured,
+} from '../sbx/generic-script.js';
 import { syncSkillsIntoSandbox } from '../sbx/copy-skills.js';
 import { installLaunchLogIntoSandbox } from '../sbx/launch-log.js';
 import { mergeSettingsSbxIntoSandbox } from '../sbx/merge-settings.js';
@@ -235,7 +240,7 @@ async function main(): Promise<void> {
   }
 
   log(chalk.bold.cyan('>>') + ` ${genericScript} ${['build', ...launchSwitches, ...symlinkPlan.bindMountArgs].join(' ')}`);
-  runGenericScript(genericScript, ['build', ...launchSwitches, ...symlinkPlan.bindMountArgs]);
+  recordCapturedOutput(runGenericScriptCaptured(genericScript, ['build', ...launchSwitches, ...symlinkPlan.bindMountArgs]));
 
   if (symlinkPlan.fileCopies.length > 0) {
     copySymlinkFilesIntoSandbox(sandboxName, symlinkPlan.fileCopies);

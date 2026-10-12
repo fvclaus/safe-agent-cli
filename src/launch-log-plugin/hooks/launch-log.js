@@ -81,26 +81,34 @@ export function consumedText(raw) {
   return `${JSON.stringify({ ...raw, consumed: true })}\n`
 }
 
-const PREFIX = {
-  ok: 'ok   ',
-  info: 'info ',
-  warning: 'warn ',
-  error: 'error',
-  skip: 'skip ',
-  progress: '...  ',
+/**
+ * Text props for a level's label (`OK:`, `WARNING:`, ...), the way the
+ * launcher's terminal output colors it: bold, in a theme color for ok,
+ * warning and error, cyan for progress, yellow for skip, dim for info.
+ * @param {Level} level
+ * @returns {{ bold?: boolean, color?: string, dimColor?: boolean }}
+ */
+export function labelStyle(level) {
+  if (level === 'ok') return { bold: true, color: 'success' }
+  if (level === 'warning') return { bold: true, color: 'warning' }
+  if (level === 'error') return { bold: true, color: 'error' }
+  if (level === 'skip') return { bold: true, color: 'warning' }
+  if (level === 'progress') return { bold: true, color: 'cyan' }
+  return { dimColor: true }
 }
 
+const LABEL = /^(OK:|WARNING:|ERROR:|INFO:|SKIP:|>>)(.*)$/s
+
 /**
- * Text props for a level: a theme color for ok, warning and error, dim for
- * the rest.
- * @param {Level} level
- * @returns {{ color?: string, dimColor?: boolean }}
+ * A line split into its leading label and the plain rest. Text without a
+ * label has an empty one.
+ * @param {string} text
+ * @returns {{ label: string, rest: string }}
  */
-export function levelStyle(level) {
-  if (level === 'ok') return { color: 'success' }
-  if (level === 'warning') return { color: 'warning' }
-  if (level === 'error') return { color: 'error' }
-  return { dimColor: true }
+export function splitLabel(text) {
+  const match = LABEL.exec(text)
+  if (match === null) return { label: '', rest: text }
+  return { label: match[1], rest: match[2] }
 }
 
 /**
@@ -110,6 +118,17 @@ export function levelStyle(level) {
 function plural(count, noun) {
   if (noun === 'entry') return `${count} ${count === 1 ? 'entry' : 'entries'}`
   return `${count} ${noun}${count === 1 ? '' : 's'}`
+}
+
+const LEVEL_PREFIX = /^(\s*)(?:OK:|WARNING:|ERROR:|INFO:|SKIP:|>>)\s?/
+
+/**
+ * The entry's text without the level prefix the level column already shows;
+ * leading indentation stays.
+ * @param {string} text
+ */
+export function withoutLevelPrefix(text) {
+  return text.replace(LEVEL_PREFIX, '$1')
 }
 
 /**
@@ -134,7 +153,7 @@ export function buildView(entries) {
   return {
     lines: [...errors, ...warnings, ...rest].map(entry => ({
       level: entry.level,
-      text: `${PREFIX[entry.level]} ${entry.text}`,
+      text: entry.text,
     })),
     header: hasWarnings
       ? `${summary} — press Esc to dismiss`
