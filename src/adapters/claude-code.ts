@@ -11,7 +11,7 @@ import { claudeSettingsPaths, SKIP_SETTINGS_SCHEMA_FLAG, verifyClaudeSettingsOrE
 import { ensureDefaultModelEffortLevels } from '../default-model-effort.js';
 import { mergeReadPaths, safeChainReadPaths } from '../safe-chain.js';
 import { loadUserSettings } from '../user-settings.js';
-import { expandHome, generateClaudeLocalMd, type MatchContext } from '../claude-fragments.js';
+import { expandHome, formatGenerateSummary, generateClaudeLocalMd, type MatchContext } from '../claude-fragments.js';
 import { isRtkHookInstalled, missingRtkWritePaths, rtkInitializationFailures } from '../rtk.js';
 import { resolveRealBwrap } from '../real-bwrap.js';
 
@@ -289,8 +289,7 @@ function generateClaudeLocalMdOrExit(
     const result = generateClaudeLocalMd(dir, process.cwd(), { isolation: 'proxy', ...launch }, rtkMdPath);
     log(
       chalk.bold.green('OK:') +
-        ` generated CLAUDE.local.md from ${result.matchedCount}/${result.totalCount} fragment(s) in ${dir}` +
-        (result.rtkAppended ? ' (+ RTK.md)' : ''),
+        ` generated CLAUDE.local.md from ${formatGenerateSummary(result, dir)}`,
     );
   } catch (e) {
     log(chalk.bold.red('ERROR:') + ` failed to generate CLAUDE.local.md: ${e instanceof Error ? e.message : String(e)}`);

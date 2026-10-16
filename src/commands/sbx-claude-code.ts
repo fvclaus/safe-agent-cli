@@ -3,7 +3,7 @@ import chalk from 'chalk';
 import { existsSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
-import { expandHome, generateClaudeLocalMd } from '../claude-fragments.js';
+import { expandHome, formatGenerateSummary, generateClaudeLocalMd } from '../claude-fragments.js';
 import { log, recordCapturedOutput } from '../launch-log.js';
 import { isGitRepo, missingMandatoryGithub } from '../git-remote.js';
 import { hasRtkHook } from '../rtk.js';
@@ -266,8 +266,7 @@ async function main(): Promise<void> {
     );
     log(
       chalk.bold.green('OK:') +
-        ` generated CLAUDE.local.md from ${result.matchedCount}/${result.totalCount} fragment(s) in ${dir}` +
-        (result.rtkAppended ? ' (+ RTK.md)' : ''),
+        ` generated CLAUDE.local.md from ${formatGenerateSummary(result, dir)}`,
     );
   }
 
