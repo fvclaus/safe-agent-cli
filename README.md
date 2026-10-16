@@ -154,6 +154,15 @@ RTK.md's inclusion depend on `claudeFragmentsDir` being set: with `checkRtk`
 enabled but `claudeFragmentsDir` unset, RTK.md's content isn't included
 anywhere by this tool.
 
+## Launch checks
+
+### `origin/HEAD` matches the remote's default branch
+
+Agent-created worktrees branch off the local `refs/remotes/origin/HEAD`. If it
+is unset or points at a different branch than the remote's default, worktrees
+silently get the wrong base, so the launcher checks it on every launch and
+aborts when it is wrong. Fix it with `git remote set-head origin --auto`.
+
 ## The bwrap shim
 
 Claude Code sandboxes every Bash command with `bwrap` (bubblewrap), building the
