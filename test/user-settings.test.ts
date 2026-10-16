@@ -123,6 +123,18 @@ describe('hasRtkHook', () => {
     expect(hasRtkHook(settings)).toBe(true);
   });
 
+  test('finds the rtk-hook-worktree-safe.sh wrapper under any path', () => {
+    expect(hasRtkHook(withCommand('bash ~/shared-work/claude/hooks/rtk-hook-worktree-safe.sh'))).toBe(true);
+    expect(hasRtkHook(withCommand('/opt/hooks/rtk-hook-worktree-safe.sh'))).toBe(true);
+    expect(hasRtkHook(withCommand('bash "/my hooks/x/rtk-hook-worktree-safe.sh"'))).toBe(true);
+    expect(hasRtkHook(withCommand("bash '/hooks/rtk-hook-worktree-safe.sh'"))).toBe(true);
+  });
+
+  test('rejects scripts whose name only contains the wrapper name', () => {
+    expect(hasRtkHook(withCommand('bash ~/hooks/rtk-hook-worktree-safe.sh.bak'))).toBe(false);
+    expect(hasRtkHook(withCommand('bash ~/hooks/my-rtk-hook-worktree-safe.sh'))).toBe(false);
+  });
+
   test('rejects a different rtk command', () => {
     expect(hasRtkHook(withCommand('rtk gain'))).toBe(false);
   });

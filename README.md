@@ -88,7 +88,7 @@ prevent.
 
 | Setting | Type | Default | Effect |
 |---------|------|---------|--------|
-| `checkRtk` | boolean | `false` | Before launching Claude, verify [rtk](https://github.com/rtk-ai/rtk) is initialized: the `rtk` binary is on PATH and `~/.claude/settings.json` contains the `rtk hook claude` PreToolUse hook. Any failure aborts the launch with a hint to run `rtk init -g`. When `claudeFragmentsDir` is also set, `~/.claude/RTK.md` is read and appended to the generated `CLAUDE.local.md` (see below) — its existence is checked there instead, as part of generation. |
+| `checkRtk` | boolean | `false` | Before launching Claude, verify [rtk](https://github.com/rtk-ai/rtk) is initialized: the `rtk` binary is on PATH and `~/.claude/settings.json` contains the `rtk hook claude` PreToolUse hook (or a hook that runs an `rtk-hook-worktree-safe.sh` wrapper, under any path). Any failure aborts the launch with a hint to run `rtk init -g`. When `claudeFragmentsDir` is also set, `~/.claude/RTK.md` is read and appended to the generated `CLAUDE.local.md` (see below) — its existence is checked there instead, as part of generation. |
 | `claudeFragmentsDir` | string | unset | Its presence is the on/off switch — when set, every `safe-claude-code` launch regenerates `CLAUDE.local.md` in the current repo from the markdown fragments in this directory (see "CLAUDE.local.md generation" below). Unset means the feature is entirely skipped. |
 
 Example:

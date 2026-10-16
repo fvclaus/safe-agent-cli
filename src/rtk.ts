@@ -1,7 +1,7 @@
 import { existsSync, readFileSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
 import { homedir } from 'node:os';
-import { join } from 'node:path';
+import { basename, join } from 'node:path';
 import { isAncestor } from './safe-chain.js';
 
 // rtk (https://github.com/rtk-ai/rtk) rewrites Bash calls through a PreToolUse
@@ -12,8 +12,18 @@ import { isAncestor } from './safe-chain.js';
 // how to report it and whether to abort the launch.
 
 const RTK_HOOK_COMMAND = 'rtk hook claude';
+// A wrapper around `rtk hook claude` that skips the git rewrite inside Claude
+// Code worktrees (https://github.com/rtk-ai/rtk/issues/3864). Counts as the rtk
+// hook wherever it lives, however it's invoked (e.g. `bash <path>/<name>`).
+const RTK_HOOK_WRAPPER = 'rtk-hook-worktree-safe.sh';
 
-/** True when Claude Code settings contain the PreToolUse hook `rtk init -g` installs. */
+function isRtkHookCommand(command: string): boolean {
+  const trimmed = command.trim();
+  if (trimmed === RTK_HOOK_COMMAND) return true;
+  return trimmed.split(/\s+/).some(word => basename(word.replace(/^["']|["']$/g, '')) === RTK_HOOK_WRAPPER);
+}
+
+/** True when Claude Code settings contain the PreToolUse hook `rtk init -g` installs, or the rtk-hook-worktree-safe.sh wrapper. */
 export function hasRtkHook(settings: unknown): boolean {
   if (typeof settings !== 'object' || settings === null) return false;
   const hooks = (settings as Record<string, unknown>)['hooks'];
@@ -26,7 +36,7 @@ export function hasRtkHook(settings: unknown): boolean {
     return Array.isArray(inner) && inner.some(h =>
       typeof h === 'object' && h !== null &&
       typeof (h as Record<string, unknown>)['command'] === 'string' &&
-      ((h as Record<string, unknown>)['command'] as string).trim() === RTK_HOOK_COMMAND,
+      isRtkHookCommand((h as Record<string, unknown>)['command'] as string),
     );
   });
 }
@@ -62,7 +72,7 @@ export function rtkInitializationFailures(home: string = homedir()): string[] {
   }
 
   if (!isRtkHookInstalled(home)) {
-    failures.push(`no PreToolUse hook "${RTK_HOOK_COMMAND}" in ${join(home, '.claude', 'settings.json')}`);
+    failures.push(`no PreToolUse hook "${RTK_HOOK_COMMAND}" (or a ${RTK_HOOK_WRAPPER} wrapper) in ${join(home, '.claude', 'settings.json')}`);
   }
 
   return failures;
