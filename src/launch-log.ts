@@ -69,7 +69,7 @@ export function log(msg: string): void {
   entries.push(...entriesFromMessage(msg));
 }
 
-/** Records output captured from a subprocess without printing it. */
+/** Records output captured from a subprocess (which the caller has already shown) without printing it again. */
 export function recordCapturedOutput(output: string): void {
   entries.push(...entriesFromMessage(output));
 }

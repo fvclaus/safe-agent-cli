@@ -242,7 +242,7 @@ async function main(): Promise<void> {
   }
 
   log(chalk.bold.cyan('>>') + ` ${genericScript} ${['build', ...launchSwitches, ...symlinkPlan.bindMountArgs].join(' ')}`);
-  recordCapturedOutput(runGenericScriptCaptured(genericScript, ['build', ...launchSwitches, ...symlinkPlan.bindMountArgs]));
+  recordCapturedOutput(await runGenericScriptCaptured(genericScript, ['build', ...launchSwitches, ...symlinkPlan.bindMountArgs]));
 
   if (symlinkPlan.fileCopies.length > 0) {
     copySymlinkFilesIntoSandbox(sandboxName, symlinkPlan.fileCopies);

@@ -1,7 +1,5 @@
-import { closeSync, existsSync, mkdtempSync, openSync, readFileSync, rmSync } from 'node:fs';
-import { tmpdir } from 'node:os';
-import { join } from 'node:path';
-import { spawnSync } from 'node:child_process';
+import { existsSync } from 'node:fs';
+import { spawn, spawnSync } from 'node:child_process';
 
 // The sandbox-creation script (e.g. claude-generic.sh) is intentionally
 // pluggable — sbx-claude-code must work for every user, and different users
@@ -57,31 +55,35 @@ export function runGenericScript(scriptPath: string, args: string[]): void {
 }
 
 /**
- * Runs `<script> <args...>` with its stdout and stderr captured instead of
- * shown, and returns the combined output. Both streams share one file
- * descriptor so their lines stay in order; stdin stays on the terminal, so a
- * prompt still reads input (without its question being visible).
+ * Runs `<script> <args...>`, echoes its output to `echo` as it arrives and
+ * returns the combined output. A shell merges stderr into stdout before exec'ing
+ * the script, so both streams travel through one pipe and their lines stay in
+ * order. stdin stays on the terminal and output is forwarded chunk by chunk, so
+ * an interactive prompt (e.g. on template drift) is visible and answerable.
  */
-export function runGenericScriptCaptured(scriptPath: string, args: string[]): string {
-  const dir = mkdtempSync(join(tmpdir(), 'sbx-claude-code-script-output-'));
-  try {
-    const outputPath = join(dir, 'output');
-    const fd = openSync(outputPath, 'w');
-    let result;
-    try {
-      result = spawnSync(scriptPath, args, { stdio: ['inherit', fd, fd] });
-    } finally {
-      closeSync(fd);
-    }
-    if (result.error) throw result.error;
-    const status = result.status ?? 1;
-    if (status !== 0) {
-      throw new Error(`${scriptPath} ${args.join(' ')} exited with code ${status}`);
-    }
-    return readFileSync(outputPath, 'utf8');
-  } finally {
-    rmSync(dir, { recursive: true, force: true });
-  }
+export function runGenericScriptCaptured(
+  scriptPath: string,
+  args: string[],
+  echo: NodeJS.WritableStream = process.stderr,
+): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const child = spawn('sh', ['-c', 'exec "$0" "$@" 2>&1', scriptPath, ...args], {
+      stdio: ['inherit', 'pipe', 'inherit'],
+    });
+    const chunks: Buffer[] = [];
+    child.stdout.on('data', (chunk: Buffer) => {
+      chunks.push(chunk);
+      echo.write(chunk);
+    });
+    child.on('error', reject);
+    child.on('close', (code, signal) => {
+      if (code !== 0) {
+        reject(new Error(`${scriptPath} ${args.join(' ')} exited with ${signal ? `signal ${signal}` : `code ${code}`}`));
+        return;
+      }
+      resolve(Buffer.concat(chunks).toString('utf8'));
+    });
+  });
 }
 
 /**

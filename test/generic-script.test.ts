@@ -2,6 +2,7 @@ import { describe, expect, test } from 'bun:test';
 import { mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { PassThrough } from 'node:stream';
 import { resolveSandboxName, runGenericScriptCaptured } from '../src/sbx/generic-script.js';
 
 function scriptPrinting(stdout: string): string {
@@ -32,18 +33,44 @@ describe('resolveSandboxName', () => {
   });
 });
 
+function scriptRunning(body: string): string {
+  const dir = mkdtempSync(join(tmpdir(), 'generic-script-test-'));
+  const scriptPath = join(dir, 'script.sh');
+  writeFileSync(scriptPath, `#!/usr/bin/env bash\n${body}`, { mode: 0o755 });
+  return scriptPath;
+}
+
+function collector(): { stream: PassThrough; text: () => string } {
+  const stream = new PassThrough();
+  const chunks: Buffer[] = [];
+  stream.on('data', (chunk: Buffer) => chunks.push(chunk));
+  return { stream, text: () => Buffer.concat(chunks).toString('utf8') };
+}
+
 describe('runGenericScriptCaptured', () => {
-  test('returns stdout and stderr in order', () => {
-    const dir = mkdtempSync(join(tmpdir(), 'generic-script-test-'));
-    const scriptPath = join(dir, 'script.sh');
-    writeFileSync(scriptPath, '#!/usr/bin/env bash\necho one\necho two >&2\necho three\n', { mode: 0o755 });
-    expect(runGenericScriptCaptured(scriptPath, ['build'])).toBe('one\ntwo\nthree\n');
+  test('returns stdout and stderr in order', async () => {
+    const path = scriptRunning('echo one\necho two >&2\necho three\n');
+    const echo = collector();
+    expect(await runGenericScriptCaptured(path, ['build'], echo.stream)).toBe('one\ntwo\nthree\n');
   });
 
-  test('throws on a non-zero exit', () => {
-    const dir = mkdtempSync(join(tmpdir(), 'generic-script-test-'));
-    const scriptPath = join(dir, 'script.sh');
-    writeFileSync(scriptPath, '#!/usr/bin/env bash\necho nope\nexit 3\n', { mode: 0o755 });
-    expect(() => runGenericScriptCaptured(scriptPath, ['build'])).toThrow('exited with code 3');
+  test('echoes the output while capturing it', async () => {
+    const path = scriptRunning('echo out\nprintf "Recreate the sandbox now? [y/N] " >&2\n');
+    const echo = collector();
+    await runGenericScriptCaptured(path, ['build'], echo.stream);
+    expect(echo.text()).toBe('out\nRecreate the sandbox now? [y/N] ');
+  });
+
+  test('passes its arguments through', async () => {
+    const path = scriptRunning('printf "%s|" "$@"\n');
+    const echo = collector();
+    expect(await runGenericScriptCaptured(path, ['build', '--bind-mount', '/a b'], echo.stream)).toBe('build|--bind-mount|/a b|');
+  });
+
+  test('rejects on a non-zero exit', async () => {
+    const path = scriptRunning('echo nope\nexit 3\n');
+    const echo = collector();
+    await expect(runGenericScriptCaptured(path, ['build'], echo.stream)).rejects.toThrow('exited with code 3');
+    expect(echo.text()).toBe('nope\n');
   });
 });
