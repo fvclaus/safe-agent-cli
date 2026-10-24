@@ -246,9 +246,14 @@ and is covered by unit tests.
 
 ### Debugging the shim
 
-Set `BWRAP_WRAPPER_DEBUG=1` before launching to append every rewritten `bwrap`
-invocation — plus each `.claude` deny it removes (`undeny:`) and each whitelisted
-path it re-binds (`rebind:`) — to `/tmp/bwrap-wrapper.log`.
+Set `BWRAP_WRAPPER_DEBUG=1` before launching to append, per sandboxed command, the
+`bwrap` args Claude Code passed in (`argv:`), each `.claude` deny the shim removes
+(`undeny:`), each whitelisted path it re-binds (`rebind:`), the project root it
+makes writable again (`restore root:`), and the rewritten invocation (`exec:`) to
+`/tmp/bwrap-wrapper.log`. A single Bash command that sets `BWRAP_WRAPPER_DEBUG=1`
+itself (e.g. `BWRAP_WRAPPER_DEBUG=1 ls`) turns logging on for just that command, no
+relaunch needed. The built-in `bwrap-shim.md` fragment tells the agent the
+same, so it can point you here when a mount looks wrong.
 
 ## Architecture
 

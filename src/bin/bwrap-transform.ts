@@ -7,6 +7,51 @@
  */
 import { dirname, join } from 'node:path';
 
+export const DEBUG_VAR = 'BWRAP_WRAPPER_DEBUG';
+const DEBUG_ASSIGNMENT = new RegExp(`(?:^|[^\\w$])${DEBUG_VAR}=1(?![\\w])`);
+
+/**
+ * True when the sandboxed command itself sets `BWRAP_WRAPPER_DEBUG=1` (as a
+ * prefix assignment or an `export`). The shim runs once per Bash command and
+ * receives that command inside the args after the `--` separator, so an agent
+ * can switch on debug logging for a single command without relaunching.
+ */
+export function commandRequestsDebug(args: readonly string[]): boolean {
+  const sep = args.indexOf('--');
+  if (sep === -1) return false;
+  return args.slice(sep + 1).some((a) => DEBUG_ASSIGNMENT.test(a));
+}
+
+export const REDACTED = '<redacted>';
+const SECRET_ENV_NAME = /PASSWORD|PASSWD|TOKEN|SECRET|CREDENTIAL|API_KEY|PRIVATE_KEY|PROXY_USER/i;
+// `scheme://user:password@host` — the proxy URLs carry the session's proxy credentials.
+const URL_USERINFO = /([a-z][a-z0-9+.-]*:\/\/)[^\s/@'"]+@/gi;
+
+/**
+ * A copy of `args` safe to write to the debug log: the value of every
+ * `--setenv` whose name looks secret is replaced, and so is the userinfo of
+ * every URL in any arg (including the wrapped command string).
+ */
+export function redactArgsForLog(args: readonly string[]): string[] {
+  const out: string[] = [];
+  for (let i = 0; i < args.length; i++) {
+    const a = args[i]!;
+    if (a === '--setenv' && i + 2 < args.length) {
+      const name = args[i + 1]!;
+      const value = SECRET_ENV_NAME.test(name) ? REDACTED : redactUrlUserinfo(args[i + 2]!);
+      out.push(a, name, value);
+      i += 2;
+      continue;
+    }
+    out.push(redactUrlUserinfo(a));
+  }
+  return out;
+}
+
+function redactUrlUserinfo(value: string): string {
+  return value.replace(URL_USERINFO, `$1${REDACTED}@`);
+}
+
 // Older Claude Code versions wrap each sandboxed command with a proxy-cleanup trap:
 //     trap "kill %1 %2 2>/dev/null; exit" EXIT
 // Under zsh a bare `exit` in a trap takes the status of the trap's last command
@@ -306,4 +351,71 @@ export function appendWritableRebinds(
   const sep = args.indexOf('--');
   if (sep === -1) return [...args]; // no bwrap separator — not a sandbox invocation
   return [...args.slice(0, sep), ...binds, ...args.slice(sep)];
+}
+
+/**
+ * Step 4c: keep the project root writable when the harness stacks a read-only
+ * layer over it. The root is a default rw mount, so steps 4a and 4b skip it on
+ * purpose (see resolveSettingsPath). A `denyWrite` that covers the project, e.g.
+ * `~/` while the project lives under the home directory, makes the harness add
+ * `--ro-bind X <root>` (or one for an ancestor of the root) after the rw bind,
+ * and the whole project turns read-only.
+ *
+ * A plain `--bind <root> <root>` after that layer would undo it, but it would
+ * also hide the masks the harness placed inside the project (`.git/config`,
+ * `.mcp.json`, `.claude/settings*.json`, the dotfile stubs). So the root is
+ * re-bound read-write and every mask inside it (`--ro-bind`, `--ro-bind-try`,
+ * `--tmpfs`) is replayed in its original order afterwards. The binds land
+ * before the `--` separator, ahead of whatever appendWritableRebinds adds.
+ *
+ * An ancestor of the root only counts when it is not `/` itself: the base
+ * `--ro-bind / /` is how every sandbox starts and is not a deny.
+ *
+ * `onRestore` is invoked with the root once the layer is undone.
+ */
+export function restoreProjectRootWritable(
+  args: readonly string[],
+  projectRoot: string,
+  onRestore?: (root: string) => void,
+): string[] {
+  const root = projectRoot.replace(/\/$/, '');
+  const sep = args.indexOf('--');
+  if (root === '' || sep === -1) return [...args];
+
+  let rootCovered = false;
+  const masks: Array<{ dest: string; mount: string[] }> = [];
+  // A read-write bind mounts over everything below its DEST, so masks mounted
+  // there earlier are dead. Replaying them would resurrect read-only layers the
+  // harness itself had already lifted (e.g. subdirectory binds that precede its
+  // `--bind <root> <root>`).
+  const dropMasksUnder = (dest: string) => {
+    for (let m = masks.length - 1; m >= 0; m--) {
+      if (isWithin(masks[m]!.dest, [dest])) masks.splice(m, 1);
+    }
+  };
+  for (let i = 0; i < sep; i++) {
+    const a = args[i]!;
+    if ((a === '--ro-bind' || a === '--ro-bind-try') && i + 2 < sep) {
+      const dest = args[i + 2]!.replace(/\/$/, '');
+      if (dest !== '' && isWithin(root, [dest])) rootCovered = true;
+      else if (isWithin(dest, [root])) masks.push({ dest, mount: [a, args[i + 1]!, args[i + 2]!] });
+      i += 2;
+    } else if (a === '--bind' && i + 2 < sep) {
+      dropMasksUnder(args[i + 2]!.replace(/\/$/, ''));
+      i += 2;
+    } else if (a === '--tmpfs' && i + 1 < sep) {
+      const dest = args[i + 1]!.replace(/\/$/, '');
+      if (isWithin(dest, [root]) && dest !== root) masks.push({ dest, mount: [a, args[i + 1]!] });
+      i += 1;
+    }
+  }
+  if (!rootCovered) return [...args];
+
+  onRestore?.(root);
+  return [
+    ...args.slice(0, sep),
+    '--bind', root, root,
+    ...masks.flatMap((m) => m.mount),
+    ...args.slice(sep),
+  ];
 }

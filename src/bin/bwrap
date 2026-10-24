@@ -16,7 +16,8 @@
  *      real exit code (current versions ship the fix; theirs is left alone).
  *   3. Inject the missing gitdir binds when the project is a git worktree.
  *   4. Honor `sandbox.filesystem.allowWrite` from the Claude settings files,
- *      overriding the harness's hardcoded .claude/.git/dotfile deny wall.
+ *      overriding the harness's hardcoded .claude/.git/dotfile deny wall, and
+ *      keep the project root writable when a `denyWrite` covers it.
  *
  * git-sandboxed (a built-in helper the agent can call) needs no wiring here:
  * it lives directly in this same directory, which is already on PATH and
@@ -34,10 +35,14 @@ import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
   appendWritableRebinds,
+  commandRequestsDebug,
+  DEBUG_VAR,
   discoverProjectRoot,
   injectWorktreeBinds,
   isWithin,
+  redactArgsForLog,
   resolveSettingsPath,
+  restoreProjectRootWritable,
   routeProxyToHostBackend,
   stripDenyWall,
   stripUnshareNetAndFixTrap,
@@ -45,7 +50,9 @@ import {
 } from './bwrap-transform.js';
 
 const REAL_BWRAP = process.env['REAL_BWRAP'] || '/usr/bin/bwrap';
-const DEBUG = Boolean(process.env['BWRAP_WRAPPER_DEBUG']);
+// Either for the whole session (set before launch) or for one Bash command that
+// itself sets BWRAP_WRAPPER_DEBUG=1.
+const DEBUG = Boolean(process.env[DEBUG_VAR]) || commandRequestsDebug(process.argv.slice(2));
 const LOG = '/tmp/bwrap-wrapper.log';
 const HOME = process.env['HOME'] ?? '';
 
@@ -72,11 +79,14 @@ try {
 function debugLog(line: string): void {
   if (!DEBUG) return;
   try {
-    appendFileSync(LOG, `[${new Date().toISOString()}] ${line}\n`);
+    // The mode only applies when the call creates the file.
+    appendFileSync(LOG, `[${new Date().toISOString()}] ${line}\n`, { mode: 0o600 });
   } catch {
     /* best-effort logging only */
   }
 }
+
+if (DEBUG) debugLog(`argv: ${redactArgsForLog(process.argv.slice(2)).join(' ')}`);
 
 // ── 1 & 2. Strip --unshare-net and fix the exit-code-eating trap ────────────────
 let args = stripUnshareNetAndFixTrap(process.argv.slice(2));
@@ -126,6 +136,10 @@ for (const file of [
 
 args = stripDenyWall(args, writePrefixes, denyPrefixes, (dest) => debugLog(`undeny: ${dest}`));
 
+// A denyWrite covering the project (e.g. `~/`) stacks a read-only layer over the
+// root, which the allowWrite handling above deliberately never touches.
+args = restoreProjectRootWritable(args, projectRoot, (root) => debugLog(`restore root: ${root}`));
+
 // Re-bind whitelisted paths read-write after the deny wall so they win over any
 // ancestor deny (e.g. allowWrite ".claude/hooks/.venv" under a denied
 // ".claude/hooks"). Only bind paths that exist and aren't re-denied — bwrap fails
@@ -151,7 +165,7 @@ for (let fd = 3; fd <= 20; fd++) {
 }
 while (stdio.length > 3 && stdio[stdio.length - 1] === 'ignore') stdio.pop();
 
-debugLog(`exec: ${REAL_BWRAP} ${args.join(' ')}`);
+if (DEBUG) debugLog(`exec: ${REAL_BWRAP} ${redactArgsForLog(args).join(' ')}`);
 
 const result = spawnSync(REAL_BWRAP, args, { stdio });
 if (result.error) {

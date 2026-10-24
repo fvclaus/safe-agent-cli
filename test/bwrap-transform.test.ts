@@ -1,6 +1,7 @@
 import { describe, expect, test } from 'bun:test';
 import {
   appendWritableRebinds,
+  commandRequestsDebug,
   discoverProjectRoot,
   findHostProxyPorts,
   injectWorktreeBinds,
@@ -8,13 +9,77 @@ import {
   NEW_TRAP,
   OLD_TRAP,
   parseGitdir,
+  REDACTED,
+  redactArgsForLog,
   resolveSettingsPath,
+  restoreProjectRootWritable,
   routeProxyToHostBackend,
   stripDenyWall,
   stripUnshareNetAndFixTrap,
   UPSTREAM_FIXED_TRAP,
   type WorktreeProbe,
 } from '../src/bin/bwrap-transform.js';
+
+describe('commandRequestsDebug', () => {
+  const wrap = (cmd: string) => ['--ro-bind', '/', '/', '--', '/bin/bash', '-c', `eval '${cmd}'`];
+
+  test('detects a prefix assignment in the sandboxed command', () => {
+    expect(commandRequestsDebug(wrap('BWRAP_WRAPPER_DEBUG=1 ls /tmp'))).toBe(true);
+  });
+
+  test('detects an export', () => {
+    expect(commandRequestsDebug(wrap('export BWRAP_WRAPPER_DEBUG=1; ls'))).toBe(true);
+  });
+
+  test('ignores other values and longer names', () => {
+    expect(commandRequestsDebug(wrap('BWRAP_WRAPPER_DEBUG=0 ls'))).toBe(false);
+    expect(commandRequestsDebug(wrap('BWRAP_WRAPPER_DEBUG=10 ls'))).toBe(false);
+    expect(commandRequestsDebug(wrap('MY_BWRAP_WRAPPER_DEBUG=1 ls'))).toBe(false);
+    expect(commandRequestsDebug(wrap('$BWRAP_WRAPPER_DEBUG=1'))).toBe(false);
+  });
+
+  test('only looks at the command after the -- separator', () => {
+    expect(commandRequestsDebug(['--setenv', 'X', 'BWRAP_WRAPPER_DEBUG=1', '--', 'ls'])).toBe(false);
+    expect(commandRequestsDebug(['BWRAP_WRAPPER_DEBUG=1'])).toBe(false);
+  });
+});
+
+describe('redactArgsForLog', () => {
+  test('replaces the value of a --setenv whose name looks secret', () => {
+    const args = [
+      '--setenv', 'CLOUDSDK_PROXY_USERNAME', 'srt.abc',
+      '--setenv', 'CLOUDSDK_PROXY_PASSWORD', 's3cret',
+      '--setenv', 'GITHUB_TOKEN', 'ghp_x', '--', 'ls',
+    ];
+    expect(redactArgsForLog(args)).toEqual([
+      '--setenv', 'CLOUDSDK_PROXY_USERNAME', REDACTED,
+      '--setenv', 'CLOUDSDK_PROXY_PASSWORD', REDACTED,
+      '--setenv', 'GITHUB_TOKEN', REDACTED, '--', 'ls',
+    ]);
+  });
+
+  test('keeps non-secret --setenv values', () => {
+    const args = ['--setenv', 'CLOUDSDK_PROXY_PORT', '3128', '--setenv', 'TMPDIR', '/tmp/claude'];
+    expect(redactArgsForLog(args)).toEqual(args);
+  });
+
+  test('strips URL credentials from --setenv values and the command string', () => {
+    const args = [
+      '--setenv', 'HTTPS_PROXY', 'http://user:pass@localhost:3128',
+      '--', 'bash', '-c', "export ALL_PROXY='socks5h://u:p@localhost:1080'; curl https://example.com",
+    ];
+    expect(redactArgsForLog(args)).toEqual([
+      '--setenv', 'HTTPS_PROXY', `http://${REDACTED}@localhost:3128`,
+      '--', 'bash', '-c', `export ALL_PROXY='socks5h://${REDACTED}@localhost:1080'; curl https://example.com`,
+    ]);
+  });
+
+  test('does not modify its input', () => {
+    const args = ['--setenv', 'API_TOKEN', 'x'];
+    redactArgsForLog(args);
+    expect(args).toEqual(['--setenv', 'API_TOKEN', 'x']);
+  });
+});
 
 describe('stripUnshareNetAndFixTrap', () => {
   test('drops --unshare-net so the sandbox shares the host network namespace', () => {
@@ -360,5 +425,132 @@ describe('appendWritableRebinds', () => {
   test('does nothing when there is no -- separator (not a sandbox invocation)', () => {
     const args = ['--version'];
     expect(appendWritableRebinds(args, ['/a'])).toEqual(args);
+  });
+});
+
+describe('restoreProjectRootWritable', () => {
+  const base = ['--ro-bind', '/', '/', '--bind', '/home/u/proj', '/home/u/proj'];
+
+  test('re-binds the root rw after a read-only layer over it and replays the masks inside it', () => {
+    const restored: string[] = [];
+    const args = [
+      ...base,
+      '--ro-bind', '/dev/null', '/home/u/proj/.mcp.json',
+      '--ro-bind', '/home/u/proj/.git', '/home/u/proj/.git',
+      '--ro-bind', '/home/u/proj', '/home/u/proj',
+      '--', 'cmd',
+    ];
+    const out = restoreProjectRootWritable(args, '/home/u/proj', (r) => restored.push(r));
+    expect(out).toEqual([
+      ...args.slice(0, -2),
+      '--bind', '/home/u/proj', '/home/u/proj',
+      '--ro-bind', '/dev/null', '/home/u/proj/.mcp.json',
+      '--ro-bind', '/home/u/proj/.git', '/home/u/proj/.git',
+      '--', 'cmd',
+    ]);
+    expect(restored).toEqual(['/home/u/proj']);
+  });
+
+  test('does not replay masks that a later read-write bind had already mounted over', () => {
+    const args = [
+      '--ro-bind', '/', '/',
+      '--ro-bind', '/home/u/proj/sub', '/home/u/proj/sub',
+      '--ro-bind', '/home/u/proj/.claude', '/home/u/proj/.claude',
+      '--bind', '/home/u/proj', '/home/u/proj',
+      '--ro-bind', '/dev/null', '/home/u/proj/.mcp.json',
+      '--ro-bind', '/home/u/proj', '/home/u/proj',
+      '--', 'cmd',
+    ];
+    expect(restoreProjectRootWritable(args, '/home/u/proj')).toEqual([
+      ...args.slice(0, -2),
+      '--bind', '/home/u/proj', '/home/u/proj',
+      '--ro-bind', '/dev/null', '/home/u/proj/.mcp.json',
+      '--', 'cmd',
+    ]);
+  });
+
+  test('a read-write bind of a subdirectory only drops the masks below it', () => {
+    const args = [
+      ...base,
+      '--ro-bind', '/home/u/proj/a/x', '/home/u/proj/a/x',
+      '--ro-bind', '/home/u/proj/b', '/home/u/proj/b',
+      '--bind', '/home/u/proj/a', '/home/u/proj/a',
+      '--ro-bind', '/home/u', '/home/u',
+      '--', 'cmd',
+    ];
+    expect(restoreProjectRootWritable(args, '/home/u/proj')).toEqual([
+      ...args.slice(0, -2),
+      '--bind', '/home/u/proj', '/home/u/proj',
+      '--ro-bind', '/home/u/proj/b', '/home/u/proj/b',
+      '--', 'cmd',
+    ]);
+  });
+
+  test('also restores when the read-only layer covers an ancestor of the root', () => {
+    const args = [...base, '--ro-bind', '/home/u', '/home/u', '--', 'cmd'];
+    expect(restoreProjectRootWritable(args, '/home/u/proj')).toEqual([
+      ...args.slice(0, -2),
+      '--bind', '/home/u/proj', '/home/u/proj',
+      '--', 'cmd',
+    ]);
+  });
+
+  test('replays --ro-bind-try and --tmpfs masks inside the root, in order', () => {
+    const args = [
+      ...base,
+      '--ro-bind-try', '/home/u/proj/.claude/hooks', '/home/u/proj/.claude/hooks',
+      '--tmpfs', '/home/u/proj/secrets',
+      '--ro-bind', '/home/u/proj', '/home/u/proj',
+      '--', 'cmd',
+    ];
+    expect(restoreProjectRootWritable(args, '/home/u/proj')).toEqual([
+      ...args.slice(0, -2),
+      '--bind', '/home/u/proj', '/home/u/proj',
+      '--ro-bind-try', '/home/u/proj/.claude/hooks', '/home/u/proj/.claude/hooks',
+      '--tmpfs', '/home/u/proj/secrets',
+      '--', 'cmd',
+    ]);
+  });
+
+  test('does not replay masks outside the root', () => {
+    const args = [
+      ...base,
+      '--ro-bind', '/dev/null', '/home/u/other/.mcp.json',
+      '--ro-bind', '/home/u/proj', '/home/u/proj',
+      '--', 'cmd',
+    ];
+    expect(restoreProjectRootWritable(args, '/home/u/proj')).toEqual([
+      ...args.slice(0, -2),
+      '--bind', '/home/u/proj', '/home/u/proj',
+      '--', 'cmd',
+    ]);
+  });
+
+  test('leaves the args alone when only masks inside the root exist', () => {
+    const args = [...base, '--ro-bind', '/dev/null', '/home/u/proj/.mcp.json', '--', 'cmd'];
+    expect(restoreProjectRootWritable(args, '/home/u/proj')).toEqual(args);
+  });
+
+  test('the base --ro-bind / / is not a read-only layer over the root', () => {
+    const args = ['--ro-bind', '/', '/', '--bind', '/home/u/proj', '/home/u/proj', '--', 'cmd'];
+    expect(restoreProjectRootWritable(args, '/home/u/proj')).toEqual(args);
+  });
+
+  test('ignores a trailing slash on the root and on the bind destination', () => {
+    const args = [...base, '--ro-bind', '/home/u/proj/', '/home/u/proj/', '--', 'cmd'];
+    const out = restoreProjectRootWritable(args, '/home/u/proj/');
+    expect(out.slice(-5)).toEqual(['--bind', '/home/u/proj', '/home/u/proj', '--', 'cmd']);
+  });
+
+  test('does nothing without a -- separator (not a sandbox invocation)', () => {
+    const args = ['--ro-bind', '/home/u/proj', '/home/u/proj'];
+    expect(restoreProjectRootWritable(args, '/home/u/proj')).toEqual(args);
+  });
+
+  test('does not touch the command after the separator', () => {
+    const args = [...base, '--ro-bind', '/home/u/proj', '/home/u/proj', '--', 'echo', '--ro-bind', '/x', '/y'];
+    const out = restoreProjectRootWritable(args, '/home/u/proj');
+    expect(out.slice(-5)).toEqual(['--', 'echo', '--ro-bind', '/x', '/y']);
+    expect(out.slice(-8, -5)).toEqual(['--bind', '/home/u/proj', '/home/u/proj']);
   });
 });

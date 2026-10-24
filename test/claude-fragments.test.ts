@@ -218,14 +218,15 @@ describe('generateClaudeLocalMd', () => {
       writeFileSync(join(fragmentsDir, 'z-not-md.txt'), 'ignored\n');
 
       const result = generateClaudeLocalMd(fragmentsDir, repoRoot, PROXY);
-      // +6 built-in fragments shipped in src/fragments: the unconditional
-      // worktree one always matches; the three github: true, one gcp: true and
-      // one rtk: true ones don't here since all three are off.
-      expect(result.totalCount).toBe(8);
-      expect(result.matchedCount).toBe(2);
+      // +7 built-in fragments shipped in src/fragments: the unconditional
+      // worktree one and the proxy-only bwrap-shim one match; the three
+      // github: true, one gcp: true and one rtk: true ones don't here since
+      // all three are off.
+      expect(result.totalCount).toBe(9);
+      expect(result.matchedCount).toBe(3);
       expect(result.rtkAppended).toBe(false);
       expect(formatGenerateSummary(result, fragmentsDir))
-        .toBe(`1/2 user fragment(s) in ${fragmentsDir} + 1/6 built-in`);
+        .toBe(`1/2 user fragment(s) in ${fragmentsDir} + 2/7 built-in`);
 
       const outPath = join(repoRoot, 'CLAUDE.local.md');
       expect(result.outputPath).toBe(outPath);
@@ -248,12 +249,12 @@ describe('generateClaudeLocalMd', () => {
       const withoutGithub = generateClaudeLocalMd(fragmentsDir, repoRoot, PROXY);
       const contentWithout = readFileSync(join(repoRoot, 'CLAUDE.local.md'), 'utf8');
       expect(contentWithout).not.toContain('git-sandboxed');
-      expect(withoutGithub.matchedCount).toBe(2);
+      expect(withoutGithub.matchedCount).toBe(3);
 
       const withGithub = generateClaudeLocalMd(fragmentsDir, repoRoot, { ...PROXY, github: true });
       const contentWithGithub = readFileSync(join(repoRoot, 'CLAUDE.local.md'), 'utf8');
       expect(contentWithGithub).toContain('git-sandboxed');
-      expect(withGithub.matchedCount).toBe(3);
+      expect(withGithub.matchedCount).toBe(4);
       expect(contentWithGithub.indexOf('user rule')).toBeLessThan(contentWithGithub.indexOf('git-sandboxed'));
     });
   });
@@ -268,7 +269,7 @@ describe('generateClaudeLocalMd', () => {
       expect(content).toContain('excludedCommands');
       expect(content).toContain('git -C');
       expect(content).not.toContain('/usr/bin/git');
-      expect(result.matchedCount).toBe(3);
+      expect(result.matchedCount).toBe(4);
     });
   });
 
@@ -278,7 +279,7 @@ describe('generateClaudeLocalMd', () => {
 
       const withoutRtk = generateClaudeLocalMd(fragmentsDir, repoRoot, PROXY);
       expect(readFileSync(join(repoRoot, 'CLAUDE.local.md'), 'utf8')).not.toContain('rtk hook claude');
-      expect(withoutRtk.matchedCount).toBe(2);
+      expect(withoutRtk.matchedCount).toBe(3);
 
       const sbxWithRtk = generateClaudeLocalMd(fragmentsDir, repoRoot, { ...PROXY, isolation: 'sbx', rtk: true });
       expect(readFileSync(join(repoRoot, 'CLAUDE.local.md'), 'utf8')).not.toContain('rtk hook claude');
@@ -288,7 +289,7 @@ describe('generateClaudeLocalMd', () => {
       const content = readFileSync(join(repoRoot, 'CLAUDE.local.md'), 'utf8');
       expect(content).toContain('rtk hook claude');
       expect(content).toContain('fragment: built-in/rtk-excluded-commands.md');
-      expect(withRtk.matchedCount).toBe(3);
+      expect(withRtk.matchedCount).toBe(4);
     });
   });
 
@@ -299,13 +300,13 @@ describe('generateClaudeLocalMd', () => {
       const withoutGcp = generateClaudeLocalMd(fragmentsDir, repoRoot, PROXY);
       const contentWithout = readFileSync(join(repoRoot, 'CLAUDE.local.md'), 'utf8');
       expect(contentWithout).not.toContain('GOOGLE_OAUTH_ACCESS_TOKEN');
-      expect(withoutGcp.matchedCount).toBe(2);
+      expect(withoutGcp.matchedCount).toBe(3);
 
       const withGcp = generateClaudeLocalMd(fragmentsDir, repoRoot, { ...PROXY, gcp: true });
       const contentWithGcp = readFileSync(join(repoRoot, 'CLAUDE.local.md'), 'utf8');
       expect(contentWithGcp).toContain('GOOGLE_OAUTH_ACCESS_TOKEN');
       expect(contentWithGcp).toContain('CLOUDSDK_CONFIG');
-      expect(withGcp.matchedCount).toBe(3);
+      expect(withGcp.matchedCount).toBe(4);
     });
   });
 
@@ -326,7 +327,7 @@ describe('generateClaudeLocalMd', () => {
 
       const result = generateClaudeLocalMd(fragmentsDir, repoRoot, PROXY, rtkMdPath);
       expect(result.rtkAppended).toBe(true);
-      expect(result.matchedCount).toBe(2); // rtkMdPath isn't counted as a fragment
+      expect(result.matchedCount).toBe(3); // rtkMdPath isn't counted as a fragment
 
       const content = readFileSync(join(repoRoot, 'CLAUDE.local.md'), 'utf8');
       expect(content).toContain('fragment rule');
@@ -350,7 +351,7 @@ describe('generateClaudeLocalMd', () => {
       writeFileSync(join(fragmentsDir, 'a.md'), 'fragment rule\n');
 
       const result = generateClaudeLocalMd(fragmentsDir, repoRoot, PROXY, undefined, ['/home/u/.secrets/env']);
-      expect(result.matchedCount).toBe(2); // the notice isn't counted as a fragment
+      expect(result.matchedCount).toBe(3); // the notice isn't counted as a fragment
 
       const content = readFileSync(join(repoRoot, 'CLAUDE.local.md'), 'utf8');
       expect(content).toContain('fragment rule');
