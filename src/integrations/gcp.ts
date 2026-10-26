@@ -181,13 +181,22 @@ export async function setupGcpIntegration({
   }
 
   log('Enabling required APIs…');
+  let apiEnabled = false;
   try {
-    await $`gcloud services enable cloudresourcemanager.googleapis.com --project=${projectId} --impersonate-service-account=${sa}`;
-    log(chalk.bold.green('OK:') + ' cloudresourcemanager.googleapis.com');
+    const out = await $`gcloud services list --enabled --project=${projectId} --filter=${'config.name=cloudresourcemanager.googleapis.com'} --format=${'value(config.name)'}`;
+    apiEnabled = out.stdout.trim() !== '';
   } catch {
-    log(chalk.bold.red('ERROR:') + ' Could not enable cloudresourcemanager.googleapis.com (insufficient permissions, or the API service is unavailable).');
-    process.exit(1);
+    // fall through to enabling
   }
+  if (!apiEnabled) {
+    try {
+      await $`gcloud services enable cloudresourcemanager.googleapis.com --project=${projectId}`;
+    } catch {
+      log(chalk.bold.red('ERROR:') + ' Could not enable cloudresourcemanager.googleapis.com (insufficient permissions, or the API service is unavailable).');
+      process.exit(1);
+    }
+  }
+  log(chalk.bold.green('OK:') + ' cloudresourcemanager.googleapis.com');
 
   const gcpConfigDir = mkdtempSync(join(tmpdir(), 'safe-agent-cli-gcp-'));
   mkdirSync(join(gcpConfigDir, 'configurations'), { recursive: true });
