@@ -1,20 +1,55 @@
 import { describe, expect, test } from 'bun:test';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, realpathSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { spawnSync } from 'node:child_process';
-import { isGitRepo, missingMandatoryGithub } from '../src/git-remote.js';
+import { gitDir, gitRepoDetectedMessage, isGitRepo, missingMandatoryGithub } from '../src/git-remote.js';
+
+function withCwd(run: () => void): void {
+  const originalCwd = process.cwd();
+  try {
+    run();
+  } finally {
+    process.chdir(originalCwd);
+  }
+}
+
+describe('gitDir', () => {
+  test('points at the parent .git from a plain subdirectory', () => {
+    withCwd(() => {
+      const dir = mkdtempSync(join(tmpdir(), 'repo-'));
+      try {
+        spawnSync('git', ['init', '--quiet'], { cwd: dir });
+        const sub = join(dir, 'empty-subdir');
+        mkdirSync(sub);
+        process.chdir(sub);
+        expect(gitDir()).toBe(join(realpathSync(dir), '.git'));
+      } finally {
+        rmSync(dir, { recursive: true, force: true });
+      }
+    });
+  });
+
+  test('undefined outside a git repository', () => {
+    withCwd(() => {
+      const dir = mkdtempSync(join(tmpdir(), 'not-a-repo-'));
+      try {
+        process.chdir(dir);
+        expect(gitDir()).toBeUndefined();
+      } finally {
+        rmSync(dir, { recursive: true, force: true });
+      }
+    });
+  });
+});
+
+describe('gitRepoDetectedMessage', () => {
+  test('names the detected .git location', () => {
+    expect(gitRepoDetectedMessage('/home/u/.git')).toBe('this directory is a git repository (git found /home/u/.git)');
+  });
+});
 
 describe('isGitRepo', () => {
-  function withCwd(run: () => void): void {
-    const originalCwd = process.cwd();
-    try {
-      run();
-    } finally {
-      process.chdir(originalCwd);
-    }
-  }
-
   test('true inside a git repository', () => {
     withCwd(() => {
       const dir = mkdtempSync(join(tmpdir(), 'repo-'));

@@ -14,7 +14,7 @@ import { gcpCliOptions, setupGcpIntegration } from '../integrations/gcp.js';
 import type { GithubCliArgs } from '../integrations/github.js';
 import { githubCliOptions, setupGithubIntegration } from '../integrations/github.js';
 import { checkSensitiveEnv } from '../env-check.js';
-import { isGitRepo, missingMandatoryGithub } from '../git-remote.js';
+import { gitDir, gitRepoDetectedMessage, isGitRepo, missingMandatoryGithub } from '../git-remote.js';
 import { log, writeLaunchLogFile } from '../launch-log.js';
 import { acquireSessionLock, releaseSessionLock } from '../session-lock.js';
 
@@ -280,8 +280,12 @@ export async function runSafeAgentCli(adapter: AgentAdapter): Promise<void> {
   );
   const args: ParsedArgs = { ...parsed, adapterFlags, rest };
 
-  if (missingMandatoryGithub(args.gh !== undefined || args.github !== undefined, isGitRepo())) {
-    log(chalk.bold.red('ERROR:') + ' this directory is a git repository; --gh/--github is required.');
+  const detectedGitDir = gitDir();
+  if (
+    detectedGitDir !== undefined &&
+    missingMandatoryGithub(args.gh !== undefined || args.github !== undefined, true)
+  ) {
+    log(chalk.bold.red('ERROR:') + ` ${gitRepoDetectedMessage(detectedGitDir)}; --gh/--github is required.`);
     process.exit(1);
   }
 

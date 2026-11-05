@@ -1,8 +1,24 @@
 import { spawnSync } from 'node:child_process';
 
+/**
+ * The absolute `.git` location governing the current working directory, or undefined outside a git repository.
+ * Git searches every parent directory (and honours `GIT_DIR`), so this can point well above the cwd.
+ */
+export function gitDir(): string | undefined {
+  const result = spawnSync('git', ['rev-parse', '--absolute-git-dir'], { encoding: 'utf8' });
+  if (result.status !== 0) return undefined;
+  const dir = result.stdout.trim();
+  return dir.length > 0 ? dir : undefined;
+}
+
 /** Whether the current working directory is inside a git repository (worktrees and submodules included). */
 export function isGitRepo(): boolean {
-  return spawnSync('git', ['rev-parse', '--git-dir'], { encoding: 'utf8' }).status === 0;
+  return gitDir() !== undefined;
+}
+
+/** Explains which `.git` made the launcher treat the cwd as a git repository, for error messages. */
+export function gitRepoDetectedMessage(dir: string): string {
+  return `this directory is a git repository (git found ${dir})`;
 }
 
 /** Whether GitHub integration must be on: it's a git repo and GitHub integration isn't enabled. */

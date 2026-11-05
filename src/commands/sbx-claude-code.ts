@@ -5,7 +5,7 @@ import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { expandHome, formatGenerateSummary, generateClaudeLocalMd } from '../claude-fragments.js';
 import { log, recordCapturedOutput } from '../launch-log.js';
-import { isGitRepo, missingMandatoryGithub } from '../git-remote.js';
+import { gitDir, gitRepoDetectedMessage, missingMandatoryGithub } from '../git-remote.js';
 import { hasRtkHook } from '../rtk.js';
 import { ensureClaudeSandboxSetting } from '../claude-sandbox-setting.js';
 import { claudeSettingsPaths, SKIP_SETTINGS_SCHEMA_FLAG, verifyClaudeSettingsOrExit } from '../claude-settings-validation.js';
@@ -182,8 +182,12 @@ async function main(): Promise<void> {
   const github = isGithubConfigured(sandboxName);
   log(chalk.bold.green('OK:') + ` github: ${github ? 'configured (sbx secret)' : 'not configured'}`);
 
-  if (missingMandatoryGithub(github, isGitRepo())) {
-    log(chalk.bold.red('ERROR:') + ' this directory is a git repository; configure it with `sbx secret set github`.');
+  const detectedGitDir = gitDir();
+  if (detectedGitDir !== undefined && missingMandatoryGithub(github, true)) {
+    log(
+      chalk.bold.red('ERROR:') +
+        ` ${gitRepoDetectedMessage(detectedGitDir)}; configure it with \`sbx secret set github\`.`,
+    );
     process.exit(1);
   }
 
