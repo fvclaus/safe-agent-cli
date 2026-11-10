@@ -89,8 +89,10 @@ at its host path, which holds for directly mounted workspaces but not in
 `--clone` mode (the agent works in a private clone at a path of sbx's
 choosing), where such a link can still dangle — a known limitation, not
 detected, since `--clone` is a switch of the user's generic script. A target
-that does not exist on the host aborts the launch. Each not-yet-approved (sandbox, source, target) triple prompts once;
-approval lives in `~/.config/safe-agent-cli/sbx-symlink-approvals.json` and
+that does not exist on the host aborts the launch. All not-yet-approved (sandbox, source, target) triples are
+shown together in one keyboard checklist (`src/sbx/symlink-approval-prompt.tsx`), all unchecked at first;
+unchecked ones are declined for this launch only, and without a terminal all are declined with a `WARNING:`. An
+approval lives under `sbxSymlinkApprovals` in the local state file (see "Local state" below) and
 is invalidated if the target changes. `sbx create` only accepts directory
 workspaces, so approved targets are routed by kind: a directory is passed to
 `build` as `--bind-mount <path>` (live, two-way); a file is pushed in via
@@ -145,8 +147,20 @@ scan, and notices that are followed by an interactive prompt anyway.
 
 `safe-claude-code` runs `claude update` first in `prepareLaunch`
 ([src/claude-update.ts](src/claude-update.ts)) and puts its output in the launch log. A failing or
-unspawnable update is a `WARNING:`, not a stop. `sbx-claude-code` does not run it: Claude runs inside
-the container, where the host's `claude` is not the one being launched.
+unspawnable update is a `WARNING:`, not a stop. It runs at most once per local calendar day: a
+successful update (exit 0, nothing else) records `lastClaudeUpdate` in the local state file, and a
+later launch on the same day logs a `SKIP:` line instead. `--skip-update` skips it entirely, e.g. when
+a wrapper already updates Claude. `sbx-claude-code` does not run it: Claude runs inside the
+container, where the host's `claude` is not the one being launched.
+
+## Local state
+
+[src/local-state.ts](src/local-state.ts) owns `$XDG_CONFIG_HOME/safe-agent-cli/state.json` (default
+`~/.config/safe-agent-cli/`): machine- and user-local state, never synced, unlike `settings.json` next
+to it. Each feature owns one top-level key (`lastClaudeUpdate`, `sbxSymlinkApprovals`); a write
+re-reads the file and replaces only its own key, keeping all others, unknown ones included. A
+malformed file is moved to `state.json.bak` with a `WARNING:` and replaced — never a stop. The
+obsolete `sbx-symlink-approvals.json` is deleted when the approvals load, without carrying it over.
 
 ## Settings validation
 

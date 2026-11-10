@@ -6,7 +6,7 @@ import { fileURLToPath } from 'node:url';
 import type { AgentAdapter } from '../launcher/safe-agent-cli.js';
 import { LAUNCH_LOG_ENV, LAUNCH_LOG_PLUGIN_DIR, log } from '../launch-log.js';
 import { ensureClaudeSandboxSetting } from '../claude-sandbox-setting.js';
-import { updateClaudeCode } from '../claude-update.js';
+import { SKIP_UPDATE_FLAG, updateClaudeCode } from '../claude-update.js';
 import { claudeSettingsPaths, SKIP_SETTINGS_SCHEMA_FLAG, verifyClaudeSettingsOrExit } from '../claude-settings-validation.js';
 import { ensureDefaultModelEffortLevels } from '../default-model-effort.js';
 import { mergeReadPaths, safeChainReadPaths } from '../safe-chain.js';
@@ -309,9 +309,13 @@ export const claudeCodeAdapter: AgentAdapter = {
       name: SKIP_SETTINGS_SCHEMA_FLAG,
       help: 'Skip validating Claude settings against the schemastore\nschema (JSON syntax is still checked).',
     },
+    {
+      name: SKIP_UPDATE_FLAG,
+      help: "Skip `claude update` (otherwise it runs at most once a day).",
+    },
   ],
   prepareLaunch: async (context) => {
-    updateClaudeCode(log);
+    updateClaudeCode(log, { skip: context.args.adapterFlags.has(SKIP_UPDATE_FLAG) });
     await verifyClaudeSettingsOrExit(
       claudeSettingsPaths(),
       context.args.adapterFlags.has(SKIP_SETTINGS_SCHEMA_FLAG),

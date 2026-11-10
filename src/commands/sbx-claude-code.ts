@@ -120,8 +120,9 @@ GitHub access under sbx is proxy-managed, configure it with
 Project symlinks whose target lives outside the project dir (e.g. \`.env\` ->
 a real secrets file under $HOME) dangle inside sbx, since only the project
 dir is mounted in. Before 'build' runs, the project is scanned for such
-symlinks; for each one not yet approved for this sandbox, you're prompted
-once (approval remembered in ~/.config/safe-agent-cli/sbx-symlink-approvals.json).
+symlinks; the ones not yet approved for this sandbox are shown together in
+one checklist (↑/↓ move, Space toggle, a all/none, Enter confirm; approval
+remembered in ~/.config/safe-agent-cli/state.json).
 Directory targets are passed to 'build' as \`--bind-mount <path>\` (your
 claude-generic.sh must support this flag) — live, two-way. File targets are
 copied in via \`sbx cp\` after the sandbox exists — one-way, refreshed every

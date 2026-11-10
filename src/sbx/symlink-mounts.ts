@@ -1,13 +1,13 @@
 import { statSync } from 'node:fs';
-import { createInterface } from 'node:readline/promises';
 import {
   isSymlinkApproved,
   loadSymlinkApprovals,
   recordSymlinkApproval,
   saveSymlinkApprovals,
-  symlinkApprovalsPath,
 } from './symlink-approvals.js';
+import { localStatePath } from '../local-state.js';
 import { scanForExternalSymlinks, type SymlinkMountCandidate } from './symlink-scan.js';
+import { promptSymlinkChecklist, type ChecklistOutcome } from './symlink-approval-prompt.js';
 
 // Ties the scan (symlink-scan.ts) and the approval store (symlink-approvals.ts)
 // together into a mount plan. `sbx create` only accepts DIRECTORY workspaces,
@@ -50,37 +50,19 @@ export interface SymlinkMountPlan {
   errors: string[];
 }
 
-async function promptSymlinkApproval(candidate: SymlinkMountCandidate, sandboxName: string): Promise<boolean> {
-  const rl = createInterface({ input: process.stdin, output: process.stdout });
-  try {
-    const behaviorNote =
-      classifySymlinkTargetKind(candidate.target) === 'directory'
-        ? '  This is a directory: it will be live bind-mounted (edits sync both ways).\n'
-        : '  This is a file: its content will be copied in at launch (one-way — edits\n' +
-          '  made inside the sandbox are not synced back, and are overwritten with\n' +
-          '  fresh host content on the next launch).\n';
-    const answer = await rl.question(
-      `sbx-claude-code: sandbox '${sandboxName}' has a project symlink pointing outside the project dir:\n` +
-      `  ${candidate.source}\n  -> ${candidate.target}\n` +
-      behaviorNote +
-      'Let the sandbox see this host path so the symlink resolves? [y/N] ',
-    );
-    const normalized = answer.trim().toLowerCase();
-    return normalized === 'y' || normalized === 'yes';
-  } finally {
-    rl.close();
-  }
-}
-
 export interface ResolveSymlinkMountPlanOptions {
   projectRoot: string;
   sandboxName: string;
   excludeDirs?: string[];
   warnMs?: number;
-  /** Overrides the approval store location — for tests. */
+  /** Overrides the local state file holding the approvals — for tests. */
   approvalsPath?: string;
-  /** Overrides the interactive prompt — for tests. */
-  confirm?: (candidate: SymlinkMountCandidate, sandboxName: string) => Promise<boolean>;
+  /** Overrides the interactive checklist — for tests. Called only with not-yet-approved candidates. */
+  select?: (
+    sandboxName: string,
+    candidates: SymlinkMountCandidate[],
+    kinds: SymlinkTargetKind[],
+  ) => Promise<ChecklistOutcome>;
 }
 
 export async function resolveSymlinkMountPlan(
@@ -101,23 +83,46 @@ export async function resolveSymlinkMountPlan(
   };
   if (scan.candidates.length === 0) return result;
 
-  const approvalsPath = options.approvalsPath ?? symlinkApprovalsPath();
-  const store = loadSymlinkApprovals(approvalsPath);
-  const confirm = options.confirm ?? promptSymlinkApproval;
+  const loaded = loadSymlinkApprovals(options.approvalsPath ?? localStatePath());
+  if (loaded.warning !== undefined) result.warnings.push(loaded.warning);
+  const store = loaded.store;
+  const pending = scan.candidates.filter(
+    (c) => !isSymlinkApproved(store, options.sandboxName, c.source, c.target),
+  );
+  const approved = new Set(scan.candidates.filter((c) => !pending.includes(c)));
   let storeChanged = false;
 
-  for (const candidate of scan.candidates) {
-    const alreadyApproved = isSymlinkApproved(store, options.sandboxName, candidate.source, candidate.target);
-    if (!alreadyApproved) {
-      const approved = await confirm(candidate, options.sandboxName);
-      if (!approved) {
-        result.declined.push(candidate);
-        continue;
-      }
-      recordSymlinkApproval(store, options.sandboxName, candidate.source, candidate.target);
-      storeChanged = true;
+  if (pending.length > 0) {
+    const kinds = pending.map((c) => classifySymlinkTargetKind(c.target));
+    let outcome: ChecklistOutcome;
+    if (options.select !== undefined) {
+      outcome = await options.select(options.sandboxName, pending, kinds);
+    } else if (process.stdin.isTTY) {
+      outcome = await promptSymlinkChecklist(options.sandboxName, options.projectRoot, pending, kinds);
+    } else {
+      result.warnings.push(
+        `no terminal to ask about ${pending.length} project symlink(s) pointing outside the project dir; declining them for this launch`,
+      );
+      outcome = pending.map(() => false);
     }
+    if (outcome === null) {
+      result.errors.push('symlink approval aborted (Ctrl+C)');
+      return result;
+    }
+    pending.forEach((candidate, i) => {
+      if (outcome[i]) {
+        recordSymlinkApproval(store, options.sandboxName, candidate.source, candidate.target);
+        storeChanged = true;
+        approved.add(candidate);
+      }
+    });
+  }
 
+  for (const candidate of scan.candidates) {
+    if (!approved.has(candidate)) {
+      result.declined.push(candidate);
+      continue;
+    }
     if (classifySymlinkTargetKind(candidate.target) === 'directory') {
       result.mounted.push(candidate);
       result.bindMountArgs.push('--bind-mount', candidate.target);
@@ -126,6 +131,9 @@ export async function resolveSymlinkMountPlan(
     }
   }
 
-  if (storeChanged) saveSymlinkApprovals(store);
+  if (storeChanged) {
+    const warning = saveSymlinkApprovals(store);
+    if (warning !== undefined) result.warnings.push(warning);
+  }
   return result;
 }
