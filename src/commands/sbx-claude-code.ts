@@ -109,7 +109,7 @@ Reads (required, hard error if missing or malformed):
                                  those keys — everything else Claude Code
                                  itself wrote survives.
 
-Also honors claudeFragmentsDir / checkRtk / sbxSymlinkScanExcludeDirs from
+Also honors claudeFragmentsDir / sbxSymlinkScanExcludeDirs from
 ~/.config/safe-agent-cli/settings.json, same as safe-claude-code — generates
 CLAUDE.local.md (isolation: sbx) before the sandbox starts. GitHub-scoped
 fragments are matched based on whether a "github" sbx secret is configured
@@ -260,13 +260,11 @@ async function main(): Promise<void> {
 
   if (userSettings.claudeFragmentsDir) {
     const dir = expandHome(userSettings.claudeFragmentsDir, homedir());
-    const rtkMdPath = userSettings.checkRtk ? join(homedir(), '.claude', 'RTK.md') : undefined;
     // sbx-claude-code doesn't wire up --gcp yet, so gcp-scoped fragments never match here.
     const result = generateClaudeLocalMd(
       dir,
       process.cwd(),
       { isolation: 'sbx', github, githubMasked: false, gcp: false, rtk: hasRtkHook(settingsSbx.values) },
-      rtkMdPath,
       symlinkPlan.fileCopies.map((c) => c.target),
     );
     log(

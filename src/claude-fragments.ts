@@ -1,5 +1,4 @@
 import { existsSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
-import { homedir } from 'node:os';
 import { basename, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { load as loadYaml } from 'js-yaml';
@@ -150,7 +149,6 @@ function renderHeader(fragmentsDir: string): string {
     '  Section sources:',
     `  - user/<file>      your fragments, in: ${fragmentsDir} (edit these)`,
     '  - built-in/<file>  shipped with safe-agent-cli, selected automatically',
-    '  - fragment: <path> a file read from that path (e.g. RTK.md)',
     '  - generated: <name> created at launch, no source file',
     '-->',
     '',
@@ -167,11 +165,6 @@ function renderFooter(fragmentsDir: string): string {
     '-->',
     '',
   ].join('\n');
-}
-
-function shortenHome(path: string): string {
-  const home = homedir();
-  return path === home || path.startsWith(`${home}/`) ? `~${path.slice(home.length)}` : path;
 }
 
 // The header already points at fragmentsDir's full path, so a user or built-in
@@ -217,7 +210,6 @@ export interface GenerateResult {
   userTotal: number;
   builtinMatched: number;
   builtinTotal: number;
-  rtkAppended: boolean;
 }
 
 /**
@@ -228,20 +220,15 @@ export interface GenerateResult {
  * `repoRoot`. Fragments are ordered alphabetically by filename.
  * safe-agent-cli's own built-in fragments (BUILTIN_FRAGMENTS_DIR, e.g. how to
  * use git-sandboxed) go through the same matching, appended after the user's
- * own fragments. When `rtkMdPath` is given, its content is read and appended
- * last of all, unconditionally, exactly like a fragment with no frontmatter —
- * this is how `checkRtk` users get RTK.md into context now, instead of a
- * hand-maintained `@RTK.md` import in CLAUDE.md. When `copiedSymlinkPaths` is
- * non-empty, a notice listing them (see renderSymlinkCopyNotice) is appended
- * last of all. Throws on any failure (missing fragments directory, malformed
- * fragment, unsupported git remote, missing rtkMdPath) — the caller is
- * expected to treat that as fatal.
+ * own fragments. When `copiedSymlinkPaths` is non-empty, a notice listing
+ * them (see renderSymlinkCopyNotice) is appended last of all. Throws on any
+ * failure (missing fragments directory, malformed fragment, unsupported git
+ * remote) — the caller is expected to treat that as fatal.
  */
 export function generateClaudeLocalMd(
   fragmentsDir: string,
   repoRoot: string,
   launch: Omit<MatchContext, 'org'>,
-  rtkMdPath?: string,
   copiedSymlinkPaths?: string[],
 ): GenerateResult {
   if (!existsSync(fragmentsDir)) {
@@ -273,14 +260,6 @@ export function generateClaudeLocalMd(
     ...matchedBuiltin.map(f => renderFragment('built-in', f)),
   ];
 
-  const rtkAppended = rtkMdPath !== undefined;
-  if (rtkMdPath !== undefined) {
-    if (!existsSync(rtkMdPath)) {
-      throw new Error(`checkRtk is enabled but ${rtkMdPath} does not exist — run: rtk init -g`);
-    }
-    sections.push(renderSection(`fragment: ${shortenHome(rtkMdPath)}`, readFileSync(rtkMdPath, 'utf8')));
-  }
-
   if (copiedSymlinkPaths && copiedSymlinkPaths.length > 0) {
     sections.push(renderSection('generated: sbx-symlink-copies.md', renderSymlinkCopyNotice(copiedSymlinkPaths)));
   }
@@ -297,15 +276,13 @@ export function generateClaudeLocalMd(
     userTotal: fragments.length,
     builtinMatched: matchedBuiltin.length,
     builtinTotal: builtinFragments.length,
-    rtkAppended,
   };
 }
 
-/** The launch-log summary of a generation, e.g. "4/8 user fragment(s) in <dir> + 3/4 built-in (+ RTK.md)". */
+/** The launch-log summary of a generation, e.g. "4/8 user fragment(s) in <dir> + 3/4 built-in". */
 export function formatGenerateSummary(result: GenerateResult, fragmentsDir: string): string {
   return (
     `${result.userMatched}/${result.userTotal} user fragment(s) in ${fragmentsDir}` +
-    ` + ${result.builtinMatched}/${result.builtinTotal} built-in` +
-    (result.rtkAppended ? ' (+ RTK.md)' : '')
+    ` + ${result.builtinMatched}/${result.builtinTotal} built-in`
   );
 }

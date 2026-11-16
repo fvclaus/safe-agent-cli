@@ -280,13 +280,11 @@ function abortGithubEnabledWithoutFragments(): never {
 // same as verifyRtkInitialized: this feature never silently degrades.
 function generateClaudeLocalMdOrExit(
   fragmentsDir: string,
-  checkRtk: boolean,
   launch: Omit<MatchContext, 'org' | 'isolation'>,
 ): void {
   const dir = expandHome(fragmentsDir, homedir());
-  const rtkMdPath = checkRtk ? join(homedir(), '.claude', 'RTK.md') : undefined;
   try {
-    const result = generateClaudeLocalMd(dir, process.cwd(), { isolation: 'proxy', ...launch }, rtkMdPath);
+    const result = generateClaudeLocalMd(dir, process.cwd(), { isolation: 'proxy', ...launch });
     log(
       chalk.bold.green('OK:') +
         ` generated CLAUDE.local.md from ${formatGenerateSummary(result, dir)}`,
@@ -350,7 +348,7 @@ export const claudeCodeAdapter: AgentAdapter = {
       }
     }
     if (settings.claudeFragmentsDir) {
-      generateClaudeLocalMdOrExit(settings.claudeFragmentsDir, settings.checkRtk, {
+      generateClaudeLocalMdOrExit(settings.claudeFragmentsDir, {
         github,
         githubMasked,
         gcp: context.gcpToken !== undefined,

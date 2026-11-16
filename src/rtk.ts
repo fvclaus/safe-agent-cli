@@ -55,13 +55,6 @@ export function isRtkHookInstalled(home: string = homedir()): boolean {
 /**
  * Everything wrong with the local rtk install, from the `checkRtk` user
  * setting's point of view. Empty array means rtk is fully initialized.
- *
- * RTK.md's existence is deliberately not checked here: when claudeFragmentsDir
- * is also set, generateClaudeLocalMd reads and appends it itself, and fails
- * the launch just as hard if it's missing. (If claudeFragmentsDir is NOT set,
- * that fallback doesn't run — RTK.md's presence goes unchecked in that case,
- * same as its content going unincluded without the old hand-maintained
- * `@RTK.md` import in CLAUDE.md.)
  */
 export function rtkInitializationFailures(home: string = homedir()): string[] {
   const failures: string[] = [];
