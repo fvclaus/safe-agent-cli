@@ -224,7 +224,6 @@ describe('generateClaudeLocalMd', () => {
       // all three are off.
       expect(result.totalCount).toBe(9);
       expect(result.matchedCount).toBe(3);
-      expect(result.rtkAppended).toBe(false);
       expect(formatGenerateSummary(result, fragmentsDir))
         .toBe(`1/2 user fragment(s) in ${fragmentsDir} + 2/7 built-in`);
 
@@ -319,38 +318,11 @@ describe('generateClaudeLocalMd', () => {
     });
   });
 
-  test('appends RTK.md content last, unconditionally, when rtkMdPath is given', () => {
-    withTempDirs((fragmentsDir, repoRoot) => {
-      writeFileSync(join(fragmentsDir, 'a.md'), 'fragment rule\n');
-      const rtkMdPath = join(repoRoot, 'RTK.md');
-      writeFileSync(rtkMdPath, 'rtk rule\n');
-
-      const result = generateClaudeLocalMd(fragmentsDir, repoRoot, PROXY, rtkMdPath);
-      expect(result.rtkAppended).toBe(true);
-      expect(result.matchedCount).toBe(3); // rtkMdPath isn't counted as a fragment
-
-      const content = readFileSync(join(repoRoot, 'CLAUDE.local.md'), 'utf8');
-      expect(content).toContain('fragment rule');
-      expect(content).toContain('rtk rule');
-      expect(content).toContain(`fragment: ${rtkMdPath}`);
-      expect(content.indexOf('fragment rule')).toBeLessThan(content.indexOf('rtk rule'));
-    });
-  });
-
-  test('a missing rtkMdPath aborts generation, same as any other malformed input', () => {
-    withTempDirs((fragmentsDir, repoRoot) => {
-      writeFileSync(join(fragmentsDir, 'a.md'), 'fragment rule\n');
-
-      expect(() => generateClaudeLocalMd(fragmentsDir, repoRoot, PROXY, join(repoRoot, 'RTK.md')))
-        .toThrow(/checkRtk is enabled but .*RTK\.md does not exist/);
-    });
-  });
-
   test('appends a copied-symlink-paths notice last, when given', () => {
     withTempDirs((fragmentsDir, repoRoot) => {
       writeFileSync(join(fragmentsDir, 'a.md'), 'fragment rule\n');
 
-      const result = generateClaudeLocalMd(fragmentsDir, repoRoot, PROXY, undefined, ['/home/u/.secrets/env']);
+      const result = generateClaudeLocalMd(fragmentsDir, repoRoot, PROXY, ['/home/u/.secrets/env']);
       expect(result.matchedCount).toBe(3); // the notice isn't counted as a fragment
 
       const content = readFileSync(join(repoRoot, 'CLAUDE.local.md'), 'utf8');
@@ -366,7 +338,7 @@ describe('generateClaudeLocalMd', () => {
     withTempDirs((fragmentsDir, repoRoot) => {
       writeFileSync(join(fragmentsDir, 'a.md'), 'fragment rule\n');
 
-      generateClaudeLocalMd(fragmentsDir, repoRoot, PROXY, undefined, []);
+      generateClaudeLocalMd(fragmentsDir, repoRoot, PROXY, []);
       const content = readFileSync(join(repoRoot, 'CLAUDE.local.md'), 'utf8');
       expect(content).not.toContain('Files copied into this sandbox');
     });
