@@ -296,6 +296,22 @@ function generateClaudeLocalMdOrExit(
   }
 }
 
+/**
+ * The integrations' temp dirs (gh/gcloud config) only need to be writable by the
+ * CLIs Claude runs in its Bash sandbox, so they go into `sandbox.filesystem.allowWrite`
+ * of the flag settings. `--add-dir` would also grant them as working directories,
+ * which makes Claude Code ask the user to trust each fresh temp dir on every launch.
+ */
+export function buildFlagSettingsArgs(
+  credentialEnv: Record<string, string>,
+  writableDirs: string[],
+): string[] {
+  const settings: Record<string, unknown> = {};
+  if (Object.keys(credentialEnv).length > 0) settings['env'] = credentialEnv;
+  if (writableDirs.length > 0) settings['sandbox'] = { filesystem: { allowWrite: writableDirs } };
+  return Object.keys(settings).length > 0 ? ['--settings', JSON.stringify(settings)] : [];
+}
+
 export const claudeCodeAdapter: AgentAdapter = {
   programName: 'safe-claude-code',
   brief: 'Launch Claude Code with GCP service-account impersonation.',
@@ -364,26 +380,13 @@ export const claudeCodeAdapter: AgentAdapter = {
     ensureProjectSettingsJson();
     ensureUserSafeChainReadAccess();
   },
-  // Writable dirs (e.g. the gh state dir) only need to be writable from sandboxed
-  // Bash, so they go into sandbox.filesystem.allowWrite rather than --add-dir:
-  // an --add-dir path is a working directory, and Claude Code asks to trust every
-  // new one — a fresh temp dir per launch would prompt on every start.
-  buildLaunchArgs: (context) => {
-    const settings: Record<string, unknown> = {};
-    if (Object.keys(context.credentialEnv).length > 0) settings['env'] = context.credentialEnv;
-    if (context.writableDirs.length > 0) {
-      settings['sandbox'] = { filesystem: { allowWrite: context.writableDirs } };
-    }
-    return [
-      ...(Object.keys(settings).length > 0
-        ? ['--settings', JSON.stringify(settings)]
-        : []),
-      ...(context.systemInstructionText
-        ? ['--append-system-prompt', context.systemInstructionText]
-        : []),
-      ...context.args.rest,
-    ];
-  },
+  buildLaunchArgs: (context): string[] => [
+    ...buildFlagSettingsArgs(context.credentialEnv, context.writableDirs),
+    ...(context.systemInstructionText
+      ? ['--append-system-prompt', context.systemInstructionText]
+      : []),
+    ...context.args.rest,
+  ],
   // Put our bwrap shim (src/bin/bwrap) on PATH so it intercepts Claude Code's
   // sandbox calls; REAL_BWRAP points it at the genuine bwrap. git-sandboxed
   // lives in this same directory so it rides along on the same PATH entry —
