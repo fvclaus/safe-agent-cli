@@ -90,15 +90,42 @@ prevent.
 |---------|------|---------|--------|
 | `checkRtk` | boolean | `false` | Before launching Claude, verify [rtk](https://github.com/rtk-ai/rtk) is initialized: the `rtk` binary is on PATH and `~/.claude/settings.json` contains the `rtk hook claude` PreToolUse hook (or a hook that runs an `rtk-hook-worktree-safe.sh` wrapper, under any path). Any failure aborts the launch with a hint to run `rtk init -g`. |
 | `claudeFragmentsDir` | string | unset | Its presence is the on/off switch — when set, every `safe-claude-code` launch regenerates `CLAUDE.local.md` in the current repo from the markdown fragments in this directory (see "CLAUDE.local.md generation" below). Unset means the feature is entirely skipped. |
+| `defaultClaudeModel` | string | unset | Model for projects that name none: on every `safe-claude-code` / `sbx-claude-code` launch, a project whose `.claude/settings.local.json` has no `model` gets this value written there (see "Per-project model and effort defaults" below). An alias (`opus`) or a full model id, passed on verbatim. Unset means no model is written. |
+| `sbxSymlinkScanExcludeDirs` | string[] | unset | Extra directory names `sbx-claude-code` skips when scanning the project for symlinks pointing outside it, in addition to `node_modules`, `.git`, `dist`, `build`, `.next`, `target` and `vendor`. |
 
 Example:
 
 ```json
 {
   "checkRtk": true,
-  "claudeFragmentsDir": "~/shared-work/claude/fragments"
+  "claudeFragmentsDir": "~/shared-work/claude/fragments",
+  "defaultClaudeModel": "opus"
 }
 ```
+
+## Per-project model and effort defaults
+
+Claude Code saves a `/model` or `/effort` pick in the global
+`~/.claude/settings.json`, so a choice made in one project becomes the starting
+point of every other. `safe-claude-code` and `sbx-claude-code` therefore write
+defaults into the project's `.claude/settings.local.json`, which takes
+precedence over the global file:
+
+- **Model:** `defaultClaudeModel` is written as `model`. Without
+  `defaultClaudeModel` no model is written.
+- **Effort:** every model listed under `modelSettings` in
+  `~/.claude/settings.json` gets `effortLevel: "medium"`.
+
+Each value is written once. A `model`, or a model's `effortLevel`, that is
+already in `settings.local.json` is left alone, whether a previous launch or
+you put it there — so edit that file to give a project its own model or effort,
+and note that changing `defaultClaudeModel` later only reaches projects that
+have no `model` yet. Only `settings.local.json` is consulted: a `model` in the
+checked-in `.claude/settings.json` does not stop the default from being
+written, and is overridden by it.
+
+A pick made inside a session still applies to that session; the next launch
+starts from the project's values again.
 
 ## CLAUDE.local.md generation
 

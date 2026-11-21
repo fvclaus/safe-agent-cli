@@ -26,6 +26,13 @@ export interface UserSettings {
    * sbx-claude-code scans the project for symlinks pointing outside it.
    */
   sbxSymlinkScanExcludeDirs?: string[];
+  /**
+   * Model a Claude launch writes as `model` into the project's
+   * .claude/settings.local.json when that file names none — an alias such as
+   * "opus" or a full model id, passed on verbatim. Unset means no model is
+   * written.
+   */
+  defaultClaudeModel?: string;
 }
 
 const DEFAULTS: UserSettings = { checkRtk: false };
@@ -85,10 +92,16 @@ export function parseUserSettings(content: string): ParsedUserSettings {
         continue;
       }
       settings.sbxSymlinkScanExcludeDirs = value;
+    } else if (key === 'defaultClaudeModel') {
+      if (typeof value !== 'string' || value.trim() === '') {
+        errors.push(`"defaultClaudeModel" must be a non-empty string, got ${JSON.stringify(value)}`);
+        continue;
+      }
+      settings.defaultClaudeModel = value;
     } else if (!IGNORED_KEYS.has(key)) {
       errors.push(
         'unrecognized key "' + key + '" — check for typos ' +
-        '(known keys: checkRtk, claudeFragmentsDir, sbxSymlinkScanExcludeDirs)',
+        '(known keys: checkRtk, claudeFragmentsDir, defaultClaudeModel, sbxSymlinkScanExcludeDirs)',
       );
     }
   }

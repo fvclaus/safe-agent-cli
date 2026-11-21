@@ -91,6 +91,26 @@ describe('parseUserSettings', () => {
     expect(r.errors).toHaveLength(1);
   });
 
+  test('reads defaultClaudeModel verbatim', () => {
+    for (const model of ['opus', 'claude-opus-5-5[1m]']) {
+      const r = parseUserSettings(JSON.stringify({ defaultClaudeModel: model }));
+      expect(r.settings.defaultClaudeModel).toBe(model);
+      expect(r.errors).toEqual([]);
+    }
+  });
+
+  test('defaultClaudeModel is unset by default', () => {
+    expect(parseUserSettings('{}').settings.defaultClaudeModel).toBeUndefined();
+  });
+
+  test('non-string or empty defaultClaudeModel is an error', () => {
+    for (const content of ['{"defaultClaudeModel": 5}', '{"defaultClaudeModel": null}', '{"defaultClaudeModel": "  "}']) {
+      const r = parseUserSettings(content);
+      expect(r.errors).toHaveLength(1);
+      expect(r.errors[0]).toContain('"defaultClaudeModel" must be a non-empty string');
+    }
+  });
+
   test('$schema is tolerated silently', () => {
     const r = parseUserSettings('{"$schema": "x", "checkRtk": true}');
     expect(r.errors).toEqual([]);

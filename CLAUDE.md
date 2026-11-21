@@ -24,6 +24,9 @@ MUST use **bun** for all package management and script execution. NEVER use npm,
   Shared helper that forces `sandbox.enabled` in the project's (host-side) `.claude/settings.local.json`. Used
   with `true` by the bwrap adapter and `false` by `sbx-claude-code` — see the sbx adapter section below for why
   this is a host-side write, not a write into the sandbox container.
+- [src/default-model.ts](src/default-model.ts), [src/default-model-effort.ts](src/default-model-effort.ts)
+  Seed a default `model` and per-model `effortLevel` into the project's `.claude/settings.local.json` — see
+  "Project defaults" below.
 - [src/launch-log.ts](src/launch-log.ts), [src/launch-log-plugin/](src/launch-log-plugin/)
   Every pre-launch status line goes through the shared `log`, which still prints to stderr and keeps a copy.
   The copy is written to a launch-log file that a Claude Code mod shows inside the session — see "Launch log"
@@ -114,6 +117,25 @@ for the bwrap adapter, `false` for `sbx-claude-code`, since Claude Code's own bw
 again inside the already-isolated sbx container is redundant and can conflict. This is a host-side
 file, bind-mounted into the sandbox by the generic script, not a file that needs reconstructing
 inside the container.
+
+## Project defaults
+
+Claude Code saves `/model` and `/effort` picks in the global `~/.claude/settings.json`, where they leak into
+every other project. Both Claude launch paths (bwrap and sbx) therefore seed the project's (host-side)
+`.claude/settings.local.json`, which takes precedence:
+
+- [src/default-model.ts](src/default-model.ts) writes `model` from `defaultClaudeModel` in
+  `~/.config/safe-agent-cli/settings.json` — verbatim, no list of known models. Unset means nothing is written.
+- [src/default-model-effort.ts](src/default-model-effort.ts) writes `effortLevel: "medium"` for every model
+  under `modelSettings` in `~/.claude/settings.json`.
+
+Both seed once: a value already in `settings.local.json`, seeded or hand-set, is never changed, so a later
+change of `defaultClaudeModel` only reaches projects without a `model`. Only `settings.local.json` is
+consulted — a `model` in the checked-in `.claude/settings.json` does not prevent seeding.
+
+Every write to that file goes through `updateClaudeLocalSettings`
+([src/claude-local-settings.ts](src/claude-local-settings.ts)), which keeps all other keys and leaves the file
+untouched when nothing changes.
 
 ## Launch log
 

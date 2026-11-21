@@ -8,6 +8,7 @@ import { LAUNCH_LOG_ENV, LAUNCH_LOG_PLUGIN_DIR, log } from '../launch-log.js';
 import { ensureClaudeSandboxSetting } from '../claude-sandbox-setting.js';
 import { SKIP_UPDATE_FLAG, updateClaudeCode } from '../claude-update.js';
 import { claudeSettingsPaths, SKIP_SETTINGS_SCHEMA_FLAG, verifyClaudeSettingsOrExit } from '../claude-settings-validation.js';
+import { ensureDefaultModel } from '../default-model.js';
 import { ensureDefaultModelEffortLevels } from '../default-model-effort.js';
 import { mergeReadPaths, safeChainReadPaths } from '../safe-chain.js';
 import { loadUserSettings } from '../user-settings.js';
@@ -359,6 +360,7 @@ export const claudeCodeAdapter: AgentAdapter = {
     ensureGitignoreStubs();
     ensureClaudeSandboxSetting(true, log);
     ensureDefaultModelEffortLevels(log);
+    ensureDefaultModel(settings.defaultClaudeModel, log);
     ensureProjectSettingsJson();
     ensureUserSafeChainReadAccess();
   },

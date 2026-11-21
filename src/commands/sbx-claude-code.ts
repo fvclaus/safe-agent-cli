@@ -9,6 +9,7 @@ import { gitDir, gitRepoDetectedMessage, missingMandatoryGithub } from '../git-r
 import { hasRtkHook } from '../rtk.js';
 import { ensureClaudeSandboxSetting } from '../claude-sandbox-setting.js';
 import { claudeSettingsPaths, SKIP_SETTINGS_SCHEMA_FLAG, verifyClaudeSettingsOrExit } from '../claude-settings-validation.js';
+import { ensureDefaultModel } from '../default-model.js';
 import { ensureDefaultModelEffortLevels } from '../default-model-effort.js';
 import { isGithubConfigured } from '../sbx/github-secret.js';
 import {
@@ -109,9 +110,9 @@ Reads (required, hard error if missing or malformed):
                                  those keys — everything else Claude Code
                                  itself wrote survives.
 
-Also honors claudeFragmentsDir / sbxSymlinkScanExcludeDirs from
-~/.config/safe-agent-cli/settings.json, same as safe-claude-code — generates
-CLAUDE.local.md (isolation: sbx) before the sandbox starts. GitHub-scoped
+Also honors claudeFragmentsDir / sbxSymlinkScanExcludeDirs / defaultClaudeModel
+from ~/.config/safe-agent-cli/settings.json, same as safe-claude-code —
+generates CLAUDE.local.md (isolation: sbx) before the sandbox starts. GitHub-scoped
 fragments are matched based on whether a "github" sbx secret is configured
 (\`sbx secret ls --service github\`) — there is no --gh/--github flag here;
 GitHub access under sbx is proxy-managed, configure it with
@@ -211,6 +212,7 @@ async function main(): Promise<void> {
   log(chalk.bold.green('OK:') + ` loaded ${settingsSbxPath}`);
 
   const userSettings = loadUserSettings(log);
+  ensureDefaultModel(userSettings.defaultClaudeModel, log);
 
   // Project symlinks whose target lives outside the project dir (e.g. `.env`
   // -> a real secrets file under $HOME) dangle inside sbx, since only the
