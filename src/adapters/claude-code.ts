@@ -364,16 +364,26 @@ export const claudeCodeAdapter: AgentAdapter = {
     ensureProjectSettingsJson();
     ensureUserSafeChainReadAccess();
   },
-  buildLaunchArgs: (context) => [
-    ...context.writableDirs.flatMap(d => ['--add-dir', d]),
-    ...(Object.keys(context.credentialEnv).length > 0
-      ? ['--settings', JSON.stringify({ env: context.credentialEnv })]
-      : []),
-    ...(context.systemInstructionText
-      ? ['--append-system-prompt', context.systemInstructionText]
-      : []),
-    ...context.args.rest,
-  ],
+  // Writable dirs (e.g. the gh state dir) only need to be writable from sandboxed
+  // Bash, so they go into sandbox.filesystem.allowWrite rather than --add-dir:
+  // an --add-dir path is a working directory, and Claude Code asks to trust every
+  // new one — a fresh temp dir per launch would prompt on every start.
+  buildLaunchArgs: (context) => {
+    const settings: Record<string, unknown> = {};
+    if (Object.keys(context.credentialEnv).length > 0) settings['env'] = context.credentialEnv;
+    if (context.writableDirs.length > 0) {
+      settings['sandbox'] = { filesystem: { allowWrite: context.writableDirs } };
+    }
+    return [
+      ...(Object.keys(settings).length > 0
+        ? ['--settings', JSON.stringify(settings)]
+        : []),
+      ...(context.systemInstructionText
+        ? ['--append-system-prompt', context.systemInstructionText]
+        : []),
+      ...context.args.rest,
+    ];
+  },
   // Put our bwrap shim (src/bin/bwrap) on PATH so it intercepts Claude Code's
   // sandbox calls; REAL_BWRAP points it at the genuine bwrap. git-sandboxed
   // lives in this same directory so it rides along on the same PATH entry —
