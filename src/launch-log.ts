@@ -15,8 +15,11 @@ export const LAUNCH_LOG_ENV = 'SAFE_AGENT_CLI_LAUNCH_LOG';
 /** The mod's plugin directory, shipped in this repo. */
 export const LAUNCH_LOG_PLUGIN_DIR = fileURLToPath(new URL('./launch-log-plugin', import.meta.url));
 
-/** Directory name of the mod once copied into a sandbox's ~/.claude/skills. */
+/** The mod's plugin name, as in its plugin.json. */
 export const LAUNCH_LOG_PLUGIN_NAME = 'safe-agent-cli-launch-log';
+
+/** Where the mod is copied in an sbx sandbox, relative to $HOME; named in CLAUDE_CODE_PLUGIN_DIRS there. */
+export const LAUNCH_LOG_PLUGIN_HOME_RELATIVE_DIR = '.claude/safe-agent-cli/launch-log-plugin';
 
 /** The mod's fallback log location, relative to $HOME, when the env var is not set (sbx). */
 export const LAUNCH_LOG_HOME_RELATIVE_PATH = '.claude/safe-agent-cli/launch-log.json';

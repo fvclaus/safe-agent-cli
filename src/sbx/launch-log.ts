@@ -4,7 +4,7 @@ import { dirname, join } from 'node:path';
 import {
   LAUNCH_LOG_HOME_RELATIVE_PATH,
   LAUNCH_LOG_PLUGIN_DIR,
-  LAUNCH_LOG_PLUGIN_NAME,
+  LAUNCH_LOG_PLUGIN_HOME_RELATIVE_DIR,
   serializeLaunchLog,
 } from '../launch-log.js';
 import { copyStagedClaudeTreeIntoHome } from './copy-into-home.js';
@@ -12,12 +12,13 @@ import { resolveSandboxHome } from './home.js';
 import { runSbx } from './run-sbx.js';
 
 // Installs the launch-log mod (../launch-log-plugin) into the sandbox and
-// hands it the log collected so far. Claude Code loads any folder under the
-// in-container ~/.claude/skills that holds a .claude-plugin/plugin.json as a
-// plugin in every session, so no env var or settings key has to reach the
-// container. The mod finds the log at LAUNCH_LOG_HOME_RELATIVE_PATH below
-// $HOME. Unlike the skills sync, the plugin carries no provenance marker, so a
-// later sync never prunes it; it is replaced wholesale on every launch.
+// hands it the log collected so far. The mod goes into a folder of this
+// sandbox's own, which the `env` block of the in-container
+// ~/.claude/settings.json names in CLAUDE_CODE_PLUGIN_DIRS (see
+// withPluginDir, applied by the settings merge). ~/.claude/skills is not
+// used: there sbx mounts its skill store, shared by every sandbox on the
+// machine. The mod finds the log at LAUNCH_LOG_HOME_RELATIVE_PATH below $HOME.
+// Both are replaced wholesale on every launch.
 //
 // Must run after the last `log` call of the launch: whatever is logged later
 // is not in the file the mod reads.
@@ -30,11 +31,20 @@ export const LAUNCH_LOG_PLUGIN_FILES = [
   'hooks/launch-log.js',
 ] as const;
 
-const SKILLS_RELATIVE_DIR = '.claude/skills';
+/** `settings` with `dir` appended to `env.CLAUDE_CODE_PLUGIN_DIRS` (a ':'-separated list, as the sandbox runs Linux), unless already listed. */
+export function withPluginDir(settings: Record<string, unknown>, dir: string): Record<string, unknown> {
+  const env = settings['env'];
+  const envObject = typeof env === 'object' && env !== null && !Array.isArray(env) ? (env as Record<string, unknown>) : {};
+  const current = envObject['CLAUDE_CODE_PLUGIN_DIRS'];
+  const dirs = typeof current === 'string' ? current.split(':').filter(Boolean) : [];
+  if (dirs.includes(dir)) return settings;
+  return { ...settings, env: { ...envObject, CLAUDE_CODE_PLUGIN_DIRS: [...dirs, dir].join(':') } };
+}
 
 export function installLaunchLogIntoSandbox(sandboxName: string): void {
   const home = resolveSandboxHome(sandboxName);
-  const pluginRelative = `${SKILLS_RELATIVE_DIR}/${LAUNCH_LOG_PLUGIN_NAME}`;
+  const pluginRelative = LAUNCH_LOG_PLUGIN_HOME_RELATIVE_DIR;
+  const ownedTree = dirname(LAUNCH_LOG_HOME_RELATIVE_PATH);
 
   runSbx(['exec', sandboxName, 'rm', '-rf', `${home}/${pluginRelative}`], 'removing the previous launch-log mod');
 
@@ -53,7 +63,7 @@ export function installLaunchLogIntoSandbox(sandboxName: string): void {
       sandboxName,
       home,
       stagedRoot: tmpDir,
-      ownedTrees: [pluginRelative, dirname(LAUNCH_LOG_HOME_RELATIVE_PATH)],
+      ownedTrees: [ownedTree],
       expectedFiles: [...LAUNCH_LOG_PLUGIN_FILES.map((f) => `${pluginRelative}/${f}`), LAUNCH_LOG_HOME_RELATIVE_PATH],
     });
   } finally {

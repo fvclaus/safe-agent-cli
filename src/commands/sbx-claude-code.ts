@@ -1,10 +1,9 @@
 #!/usr/bin/env bun
 import chalk from 'chalk';
-import { existsSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { expandHome, formatGenerateSummary, generateClaudeLocalMd } from '../claude-fragments.js';
-import { log, recordCapturedOutput } from '../launch-log.js';
+import { LAUNCH_LOG_PLUGIN_NAME, log, recordCapturedOutput } from '../launch-log.js';
 import { gitDir, gitRepoDetectedMessage, missingMandatoryGithub } from '../git-remote.js';
 import { hasRtkHook } from '../rtk.js';
 import { ensureClaudeSandboxSetting } from '../claude-sandbox-setting.js';
@@ -18,8 +17,8 @@ import {
   runGenericScript,
   runGenericScriptCaptured,
 } from '../sbx/generic-script.js';
-import { syncSkillsIntoSandbox } from '../sbx/copy-skills.js';
 import { installLaunchLogIntoSandbox } from '../sbx/launch-log.js';
+import { skillStoreWarnings } from '../sbx/skill-store-drift.js';
 import { mergeSettingsSbxIntoSandbox } from '../sbx/merge-settings.js';
 import { loadSettingsSbx } from '../sbx/settings-sbx.js';
 import { copySymlinkFilesIntoSandbox } from '../sbx/symlink-copy.js';
@@ -279,18 +278,11 @@ async function main(): Promise<void> {
   const mergedKeys = Object.keys(settingsSbx.values).join(', ');
   log(chalk.bold.green('OK:') + ` merged {${mergedKeys}} from ${settingsSbxPath} into sandbox '${sandboxName}'`);
 
-  // Mirror host ~/.claude/skills into the sandbox (always-on when the host dir
-  // exists). Host-wins per skill; sandbox-local skills are preserved and
-  // host-synced skills the host dropped are pruned — see copy-skills.ts.
-  const hostSkillsDir = join(homedir(), '.claude', 'skills');
-  if (existsSync(hostSkillsDir)) {
-    const skills = syncSkillsIntoSandbox(sandboxName, hostSkillsDir);
-    log(
-      chalk.bold.green('OK:') +
-        ` skills: synced ${skills.synced.length}, pruned ${skills.pruned.length} in ${skills.totalMs.toFixed(0)}ms` +
-        ` into sandbox '${sandboxName}'`,
-    );
-  }
+  // Skills reach the sandbox through sbx's own skill store; this only checks
+  // that the store matches ~/.claude/skills — see skill-store-drift.ts.
+  const storeWarnings = skillStoreWarnings(homedir(), LAUNCH_LOG_PLUGIN_NAME);
+  for (const w of storeWarnings) log(chalk.bold.yellow('WARNING:') + ` ${w}`);
+  if (storeWarnings.length === 0) log(chalk.bold.green('OK:') + ' sbx skill store matches ~/.claude/skills');
 
   log(chalk.bold.cyan('>>') + ` ${genericScript} ${args.launchCommand.join(' ')}`);
   installLaunchLogIntoSandbox(sandboxName);

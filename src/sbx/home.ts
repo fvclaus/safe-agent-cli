@@ -2,7 +2,7 @@ import { spawnSync } from 'node:child_process';
 
 // Resolving $HOME inside the sandbox (rather than assuming /home/<user> or
 // /root) is shared by everything that writes into the sandbox's ~/.claude:
-// the hooks merge (merge-settings.ts) and the skills sync (copy-skills.ts).
+// the settings merge (merge-settings.ts) and the launch-log install (launch-log.ts).
 export function resolveSandboxHome(sandboxName: string): string {
   const result = spawnSync('sbx', ['exec', sandboxName, 'bash', '-c', 'printf %s "$HOME"'], { encoding: 'utf8' });
   if (result.error) throw result.error;

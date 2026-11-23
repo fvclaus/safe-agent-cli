@@ -2,7 +2,9 @@ import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'no
 import { spawnSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { LAUNCH_LOG_PLUGIN_HOME_RELATIVE_DIR } from '../launch-log.js';
 import { resolveSandboxHome } from './home.js';
+import { withPluginDir } from './launch-log.js';
 import type { SettingsSbx } from './settings-sbx.js';
 
 // The sandbox's in-container ~/.claude/settings.json already carries real
@@ -12,7 +14,8 @@ import type { SettingsSbx } from './settings-sbx.js';
 // outright, like `docker cp`, so this pulls the existing file out, overlays
 // every key settings-sbx.json declares, and pushes the result back — every
 // key settings-sbx.json doesn't mention (e.g. theme, or `tui` if the user
-// never set it there) survives untouched.
+// never set it there) survives untouched. The launch-log mod's folder is then
+// added to env.CLAUDE_CODE_PLUGIN_DIRS (see launch-log.ts).
 
 export function mergeSettingsSbxIntoSandbox(sandboxName: string, settingsSbx: SettingsSbx): void {
   const home = resolveSandboxHome(sandboxName);
@@ -37,7 +40,7 @@ export function mergeSettingsSbxIntoSandbox(sandboxName: string, settingsSbx: Se
       }
     }
 
-    const merged = { ...existing, ...settingsSbx.values };
+    const merged = withPluginDir({ ...existing, ...settingsSbx.values }, `${home}/${LAUNCH_LOG_PLUGIN_HOME_RELATIVE_DIR}`);
     writeFileSync(localPath, JSON.stringify(merged, null, 2) + '\n', 'utf8');
 
     const push = spawnSync('sbx', ['cp', localPath, remotePath], { encoding: 'utf8' });

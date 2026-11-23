@@ -9,7 +9,7 @@ import type { SymlinkMountCandidate } from './symlink-scan.js';
 // only accepts directory workspaces. Rather than bind-mount its parent
 // directory (which would expose every sibling in it, not just the approved
 // file), the file's content is pushed into the sandbox at its identical
-// absolute path via `sbx cp`, the same mechanism copy-skills.ts already uses.
+// absolute path via `sbx cp`, as copy-into-home.ts does for the launch-log mod.
 // This is a ONE-WAY, per-launch push: edits made to the copy inside the
 // sandbox are never read back, and are overwritten with fresh host content on
 // the next launch (see the CLAUDE.local.md notice generated alongside this —

@@ -107,6 +107,13 @@ every sibling in it. See `src/sbx/symlink-scan.ts`,
 `build`, `.next`, `target`, `vendor`) extend via `sbxSymlinkScanExcludeDirs`
 in `~/.config/safe-agent-cli/settings.json`.
 
+Skills reach the sandbox through sbx's own machine-wide skill store (filled by `sbx skills import`, shared by
+every sandbox), never through a copy by this tool. Each launch compares the store (path from `sbx skills ls
+--json`) with `~/.claude/skills` the way the import reads it (top-level symlinks followed, symlinks inside a
+skill skipped, a skill `~/.agents/skills` also has left out) and logs a `WARNING:` naming missing or differing
+skills with `sbx skills import --force` as the fix; store-only skills are not reported. See
+`src/sbx/skill-store-drift.ts`.
+
 ```bash
 sbx-claude-code --generic-script ~/workspace/infrastructure/sbx/claude-generic.sh -- run
 ```
@@ -154,8 +161,10 @@ readable in the terminal) and additionally hands them to a Claude Code mod, `src
   (old Claude Code, untrusted folder, managed settings), nothing extra happens.
 - bwrap: the launcher writes the log into a temp dir and sets `CLAUDE_CODE_PLUGIN_DIRS` and
   `SAFE_AGENT_CLI_LAUNCH_LOG` in claude's environment. sbx: the plugin is copied into the container's
-  `~/.claude/skills/safe-agent-cli-launch-log/` (loaded automatically) and the log to
-  `~/.claude/safe-agent-cli/launch-log.json`, the mod's fallback when the env var is unset. Only the files in
+  `~/.claude/safe-agent-cli/launch-log-plugin/`, which the settings merge adds to `env.CLAUDE_CODE_PLUGIN_DIRS`
+  in the in-container `~/.claude/settings.json` (Claude Code reads that variable from the user settings' `env`
+  block too), and the log to `~/.claude/safe-agent-cli/launch-log.json`, the mod's fallback when the env var is
+  unset. `~/.claude/skills` is not used: sbx mounts its shared skill store there. Only the files in
   `LAUNCH_LOG_PLUGIN_FILES` are copied, and the install is the last step before the launch command: nothing may
   `log` after it. Copies into the sandbox go through [src/sbx/copy-into-home.ts](src/sbx/copy-into-home.ts), which
   copies a named staged directory (never the `<dir>/.` form, which `sbx cp` nests one level deeper), hands
